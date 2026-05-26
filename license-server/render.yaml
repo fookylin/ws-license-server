@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: ws-license-server
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node license-server.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3000
+      - key: TZ
+        value: Asia/Shanghai

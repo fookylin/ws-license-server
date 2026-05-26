@@ -1,0 +1,31 @@
+# 依赖
+node_modules/
+package-lock.json
+yarn.lock
+
+# 环境配置（可能含敏感信息）
+.env
+proxy-config.json
+
+# 数据库文件（SQLite 会在服务器上生成）
+*.db
+*.db-journal
+
+# 日志
+*.log
+npm-debug.log*
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 编译产物
+dist/
+build/
+.electron/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo

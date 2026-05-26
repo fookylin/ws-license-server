@@ -1,0 +1,16 @@
+{
+  "name": "ws-license-server",
+  "version": "1.0.0",
+  "description": "WS多开管理器 - 在线授权服务器",
+  "main": "license-server.js",
+  "scripts": {
+    "start": "node license-server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "sqlite3": "^5.1.6"
+  },
+  "engines": {
+    "node": "18.x"
+  }
+}
