@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WS多开管理器 - 授权管理</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      padding: 20px;
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    .header {
+      background: white;
+      padding: 30px;
+      border-radius: 10px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+      margin-bottom: 20px;
+      text-align: center;
+    }
+
+    .header h1 {
+      color: #667eea;
+      font-size: 2.5em;
+      margin-bottom: 10px;
+    }
+
+    .header p {
+      color: #666;
+      font-size: 1.1em;
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 20px;
+      margin-bottom: 20px;
+    }
+
+    .stat-card {
+      background: white;
+      padding: 20px;
+      border-radius: 10px;
+      box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+      text-align: center;
+    }
+
+    .stat-card h3 {
+      color: #667eea;
+      font-size: 2em;
+      margin-bottom: 5px;
+    }
+
+    .stat-card p {
+      color: #666;
+      font-size: 0.9em;
+    }
+
+    .card {
+      background: white;
+      padding: 30px;
+      border-radius: 10px;
+      box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+      margin-bottom: 20px;
+    }
+
+    .card h2 {
+      color: #667eea;
+      margin-bottom: 20px;
+      font-size: 1.5em;
+    }
+
+    .form-group {
+      margin-bottom: 20px;
+    }
+
+    .form-group label {
+      display: block;
+      margin-bottom: 5px;
+      color: #333;
+      font-weight: 500;
+    }
+
+    .form-group input {
+      width: 100%;
+      padding: 10px;
+      border: 2px solid #e0e0e0;
+      border-radius: 5px;
+      font-size: 1em;
+      transition: border-color 0.3s;
+    }
+
+    .form-group input:focus {
+      outline: none;
+      border-color: #667eea;
+    }
+
+    .btn {
+      padding: 10px 20px;
+      border: none;
+      border-radius: 5px;
+      font-size: 1em;
+      cursor: pointer;
+      transition: all 0.3s;
+      font-weight: 500;
+    }
+
+    .btn-primary {
+      background: #667eea;
+      color: white;
+    }
+
+    .btn-primary:hover {
+      background: #5568d3;
+      transform: translateY(-2px);
+      box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+    }
+
+    .btn-danger {
+      background: #e74c3c;
+      color: white;
+    }
+
+    .btn-danger:hover {
+      background: #c0392b;
+    }
+
+    .btn-success {
+      background: #2ecc71;
+      color: white;
+    }
+
+    .btn-success:hover {
+      background: #27ae60;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 20px;
+    }
+
+    th, td {
+      padding: 12px;
+      text-align: left;
+      border-bottom: 1px solid #e0e0e0;
+    }
+
+    th {
+      background: #f8f9fa;
+      color: #667eea;
+      font-weight: 600;
+    }
+
+    tr:hover {
+      background: #f8f9fa;
+    }
+
+    .status-active {
+      color: #2ecc71;
+      font-weight: 500;
+    }
+
+    .status-revoked {
+      color: #e74c3c;
+      font-weight: 500;
+    }
+
+    .status-expired {
+      color: #f39c12;
+      font-weight: 500;
+    }
+
+    .key-cell {
+      font-family: 'Courier New', monospace;
+      background: #f8f9fa;
+      padding: 5px 10px;
+      border-radius: 3px;
+      font-size: 0.9em;
+    }
+
+    .copy-btn {
+      padding: 5px 10px;
+      font-size: 0.85em;
+      margin-left: 10px;
+    }
+
+    .alert {
+      padding: 15px;
+      border-radius: 5px;
+      margin-bottom: 20px;
+      display: none;
+    }
+
+    .alert-success {
+      background: #d4edda;
+      color: #155724;
+      border: 1px solid #c3e6cb;
+    }
+
+    .alert-error {
+      background: #f8d7da;
+      color: #721c24;
+      border: 1px solid #f5c6cb;
+    }
+
+    .loading {
+      text-align: center;
+      padding: 20px;
+      color: #666;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>🔐 WS多开管理器</h1>
+      <p>授权管理系统 v1.0</p>
+    </div>
+
+    <div class="stats" id="stats">
+      <div class="stat-card">
+        <h3 id="totalKeys">-</h3>
+        <p>总密钥数</p>
+      </div>
+      <div class="stat-card">
+        <h3 id="activatedKeys">-</h3>
+        <p>已激活</p>
+      </div>
+      <div class="stat-card">
+        <h3 id="revokedKeys">-</h3>
+        <p>已撤销</p>
+      </div>
+      <div class="stat-card">
+        <h3 id="totalActivations">-</h3>
+        <p>总激活次数</p>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>📧 生成新授权密钥</h2>
+      <div class="alert" id="generateAlert"></div>
+      <form id="generateForm">
+        <div class="form-group">
+          <label>客户名称</label>
+          <input type="text" id="accountName" required placeholder="请输入客户名称">
+        </div>
+        <div class="form-group">
+          <label>授权月数</label>
+          <input type="number" id="months" required placeholder="请输入授权月数" min="1" max="120" value="6">
+        </div>
+        <div class="form-group">
+          <label>最大激活次数</label>
+          <input type="number" id="maxActivations" required placeholder="请输入最大激活次数" min="1" max="10" value="1">
+        </div>
+        <button type="submit" class="btn btn-primary">生成授权密钥</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <h2>📋 所有授权密钥</h2>
+      <div id="keysTable">
+        <div class="loading">加载中...</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // 加载统计信息
+    async function loadStats() {
+      try {
+        const response = await fetch('/api/stats');
+        const result = await response.json();
+        
+        if (result.success) {
+          document.getElementById('totalKeys').textContent = result.data.total_keys;
+          document.getElementById('activatedKeys').textContent = result.data.activated_keys;
+          document.getElementById('revokedKeys').textContent = result.data.revoked_keys;
+          document.getElementById('totalActivations').textContent = result.data.active_activations;
+        }
+      } catch (error) {
+        console.error('加载统计信息失败:', error);
+      }
+    }
+
+    // 加载所有密钥
+    async function loadKeys() {
+      try {
+        const response = await fetch('/api/keys');
+        const result = await response.json();
+        
+        if (result.success) {
+          renderKeysTable(result.data);
+        }
+      } catch (error) {
+        console.error('加载密钥失败:', error);
+        document.getElementById('keysTable').innerHTML = '<div class="loading">加载失败</div>';
+      }
+    }
+
+    // 渲染密钥表格
+    function renderKeysTable(keys) {
+      if (keys.length === 0) {
+        document.getElementById('keysTable').innerHTML = '<div class="loading">暂无授权密钥</div>';
+        return;
+      }
+
+      let html = `
+        <table>
+          <thead>
+            <tr>
+              <th>客户名称</th>
+              <th>授权密钥</th>
+              <th>月数</th>
+              <th>过期时间</th>
+              <th>激活次数</th>
+              <th>状态</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+      `;
+
+      keys.forEach(key => {
+        const expiryDate = new Date(key.expiry_date * 1000).toLocaleDateString('zh-CN');
+        const isExpired = Date.now() / 1000 > key.expiry_date;
+        const status = key.is_revoked ? 'revoked' : (isExpired ? 'expired' : 'active');
+        const statusText = key.is_revoked ? '已撤销' : (isExpired ? '已过期' : '有效');
+
+        html += `
+          <tr>
+            <td>${key.account_name}</td>
+            <td>
+              <span class="key-cell">${key.key}</span>
+              <button class="btn btn-success copy-btn" onclick="copyKey('${key.key}')">复制</button>
+            </td>
+            <td>${key.months} 个月</td>
+            <td>${expiryDate}</td>
+            <td>${key.current_activations} / ${key.max_activations}</td>
+            <td class="status-${status}">${statusText}</td>
+            <td>
+              ${!key.is_revoked ? `<button class="btn btn-danger" onclick="revokeKey('${key.key}')">撤销</button>` : '<span style="color:#ccc">已撤销</span>'}
+            </td>
+          </tr>
+        `;
+      });
+
+      html += '</tbody></table>';
+      document.getElementById('keysTable').innerHTML = html;
+    }
+
+    // 复制密钥
+    function copyKey(key) {
+      navigator.clipboard.writeText(key).then(() => {
+        showAlert('success', '密钥已复制到剪贴板');
+      }).catch(err => {
+        console.error('复制失败:', err);
+        showAlert('error', '复制失败');
+      });
+    }
+
+    // 撤销密钥
+    async function revokeKey(key) {
+      if (!confirm('确定要撤销此密钥吗？撤销后所有设备将无法使用。')) {
+        return;
+      }
+
+      try {
+        const response = await fetch('/api/revoke', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key })
+        });
+
+        const result = await response.json();
+        
+        if (result.success) {
+          showAlert('success', '密钥已撤销');
+          loadStats();
+          loadKeys();
+        } else {
+          showAlert('error', result.error);
+        }
+      } catch (error) {
+        console.error('撤销失败:', error);
+        showAlert('error', '撤销失败');
+      }
+    }
+
+    // 生成新密钥
+    document.getElementById('generateForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+
+      const accountName = document.getElementById('accountName').value;
+      const months = document.getElementById('months').value;
+      const maxActivations = document.getElementById('maxActivations').value;
+
+      try {
+        const response = await fetch('/api/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ account_name: accountName, months, max_activations: maxActivations })
+        });
+
+        const result = await response.json();
+        
+        if (result.success) {
+          const key = result.data.key;
+          showAlert('success', `授权密钥生成成功: ${key}`);
+          document.getElementById('generateForm').reset();
+          loadStats();
+          loadKeys();
+        } else {
+          showAlert('error', result.error);
+        }
+      } catch (error) {
+        console.error('生成失败:', error);
+        showAlert('error', '生成失败');
+      }
+    });
+
+    // 显示提示
+    function showAlert(type, message) {
+      const alert = document.getElementById('generateAlert');
+      alert.className = `alert alert-${type}`;
+      alert.textContent = message;
+      alert.style.display = 'block';
+
+      setTimeout(() => {
+        alert.style.display = 'none';
+      }, 5000);
+    }
+
+    // 页面加载时执行
+    loadStats();
+    loadKeys();
+
+    // 每30秒刷新一次
+    setInterval(() => {
+      loadStats();
+      loadKeys();
+    }, 30000);
+  </script>
+</body>
+</html>
