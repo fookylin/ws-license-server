@@ -429,6 +429,37 @@ app.get('/api/health', async (req, res) => {
 })
 
 /**
+ * POST /api/generate
+ * 生成激活码（需管理密钥鉴权）
+ * Body: { admin_key: string, days: number, count?: number }
+ * admin_key 通过环境变量 ADMIN_KEY 设置
+ */
+app.post('/api/generate', async (req, res) => {
+  const adminKey = process.env.ADMIN_KEY || 'ws-admin-2026'
+  const { admin_key, days, count } = req.body
+
+  if (!admin_key || admin_key !== adminKey) {
+    return res.json({ success: false, error: 'UNAUTHORIZED' })
+  }
+
+  if (!days || days < 1 || days > 3650) {
+    return res.json({ success: false, error: 'INVALID_DAYS', message: '天数需在1-3650之间' })
+  }
+
+  const num = Math.min(count || 1, 100) // 一次最多100个
+  const keys = []
+
+  for (let i = 0; i < num; i++) {
+    const hex = crypto.randomBytes(16).toString('hex').toUpperCase()
+    const key = `WS-${hex}-${days}`
+    keys.push(key)
+  }
+
+  console.log(`[生成] 生成${num}个激活码，有效期${days}天`)
+  return res.json({ success: true, keys, days, count: num })
+})
+
+/**
  * GET /admin/licenses
  * 简单管理接口（生产环境需加鉴权）
  */
