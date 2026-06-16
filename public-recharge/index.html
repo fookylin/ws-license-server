@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WS多开管理器 - 充值中心</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --bg: #f6f5f3; --white: #fff; --text: #1a1a1a;
+    --text-secondary: #6b6b6b; --text-tertiary: #a0a0a0;
+    --border: #e5e5e5; --primary: #5468ff; --primary-light: #eef0ff;
+    --success: #25d366; --radius: 10px;
+    --font: 'Inter', -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    --shadow: 0 0 0 0.5px rgba(0,0,0,0.04), 0 4px 12px rgba(0,0,0,0.04);
+  }
+  body {
+    font-family: var(--font); background: var(--bg); color: var(--text);
+    min-height: 100vh; font-size: 14px; line-height: 1.5;
+  }
+  ::-webkit-scrollbar { width: 4px; }
+  ::-webkit-scrollbar-thumb { background: #d0d0d0; border-radius: 2px; }
+
+  .header {
+    background: linear-gradient(135deg, #5468ff 0%, #7c3aed 100%);
+    color: #fff; padding: 40px 20px 30px; text-align: center;
+  }
+  .header h1 { font-size: 26px; font-weight: 600; margin-bottom: 6px; }
+  .header p { opacity: 0.85; font-size: 14px; }
+  .header .user-info {
+    display: flex; align-items: center; justify-content: center; gap: 12px;
+    margin-top: 12px; font-size: 13px; opacity: 0.9;
+  }
+  .header .user-info .login-btn {
+    color: #fff; border: 1px solid rgba(255,255,255,0.4); border-radius: 6px;
+    padding: 4px 14px; font-size: 12px; cursor: pointer; text-decoration: none;
+    transition: all 0.15s;
+  }
+  .header .user-info .login-btn:hover { background: rgba(255,255,255,0.15); }
+
+  .container { max-width: 800px; margin: 0 auto; padding: 24px 16px; }
+
+  .section-title { font-size: 16px; font-weight: 600; margin-bottom: 14px; margin-top: 24px; display: flex; align-items: center; gap: 8px; }
+  .section-title:first-child { margin-top: 0; }
+
+  .plans-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+  .plan-card {
+    background: var(--white); border-radius: var(--radius); box-shadow: var(--shadow);
+    padding: 20px; text-align: center; cursor: pointer;
+    border: 2px solid transparent; transition: all 0.2s;
+    position: relative;
+  }
+  .plan-card:hover { border-color: var(--border); transform: translateY(-2px); box-shadow: 0 4px 20px rgba(0,0,0,0.08); }
+  .plan-card.selected { border-color: var(--primary); background: var(--primary-light); }
+  .plan-card .popular {
+    position: absolute; top: -10px; left: 50%; transform: translateX(-50%);
+    background: var(--primary); color: #fff; font-size: 10px; font-weight: 600;
+    padding: 2px 12px; border-radius: 10px; text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .plan-card .plan-label { font-size: 12px; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+  .plan-card .plan-price { font-size: 28px; font-weight: 700; color: var(--text); margin-bottom: 4px; }
+  .plan-card .plan-price .currency { font-size: 16px; font-weight: 500; }
+  .plan-card .plan-desc { font-size: 13px; color: var(--text-secondary); }
+  .plan-card .plan-save { font-size: 11px; color: var(--success); margin-top: 6px; }
+
+  .card {
+    background: var(--white); border-radius: var(--radius); box-shadow: var(--shadow);
+    padding: 20px; margin-bottom: 16px;
+  }
+  .card h3 { font-size: 14px; font-weight: 600; margin-bottom: 12px; }
+
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    padding: 10px 24px; border-radius: 8px; border: none;
+    font-size: 14px; font-weight: 600; cursor: pointer;
+    transition: all 0.15s; font-family: var(--font);
+  }
+  .btn-primary { background: var(--primary); color: #fff; width: 100%; }
+  .btn-primary:hover { opacity: 0.85; }
+  .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn-outline { background: transparent; border: 1px solid var(--border); color: var(--text); }
+  .btn-outline:hover { background: #f5f5f5; }
+
+  .input-group { display: flex; gap: 8px; align-items: center; }
+  .input-group input {
+    flex: 1; padding: 8px 14px; border: 1px solid var(--border); border-radius: 6px;
+    font-size: 13px; outline: none; font-family: var(--font);
+  }
+  .input-group input:focus { border-color: var(--primary); }
+  .input-group .btn { flex-shrink: 0; padding: 8px 16px; font-size: 12px; }
+
+  .order-summary { background: #fafafa; border-radius: 8px; padding: 14px; margin-top: 12px; }
+  .order-summary .row { display: flex; justify-content: space-between; padding: 4px 0; font-size: 13px; }
+  .order-summary .row.total { font-weight: 700; font-size: 16px; border-top: 1px solid var(--border); padding-top: 8px; margin-top: 4px; }
+
+  .login-box {
+    max-width: 400px; margin: 60px auto; text-align: center;
+  }
+  .login-box .card { padding: 30px; }
+  .login-box h2 { margin-bottom: 20px; }
+  .login-box .form-group { margin-bottom: 14px; text-align: left; }
+  .login-box .form-group label { display: block; font-size: 12px; font-weight: 500; color: var(--text-secondary); margin-bottom: 4px; }
+  .login-box .form-group input {
+    width: 100%; padding: 10px 14px; border: 1px solid var(--border); border-radius: 8px;
+    font-size: 14px; outline: none; font-family: var(--font);
+  }
+  .login-box .form-group input:focus { border-color: var(--primary); }
+  .login-box .switch { font-size: 12px; color: var(--primary); cursor: pointer; margin-top: 10px; display: inline-block; }
+  .login-box .switch:hover { text-decoration: underline; }
+
+  .orders-list { font-size: 13px; }
+  .order-item {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 10px 0; border-bottom: 1px solid #f0f0f0;
+  }
+  .order-item:last-child { border-bottom: none; }
+  .order-item .oi-status { font-size: 11px; }
+
+  .tag {
+    display: inline-block; padding: 2px 8px; border-radius: 4px;
+    font-size: 11px; font-weight: 500;
+  }
+  .tag.green { background: #d1fae5; color: #065f46; }
+  .tag.red { background: #fee2e2; color: #991b1b; }
+  .tag.yellow { background: #fef3c7; color: #92400e; }
+  .tag.blue { background: #dbeafe; color: #1e40af; }
+  .tag.gray { background: #f3f4f6; color: #6b7280; }
+
+  .toast-container { position: fixed; top: 16px; right: 16px; z-index: 9999; display: flex; flex-direction: column; gap: 6px; }
+  .toast {
+    padding: 10px 16px; background: #323232; color: #fff; border-radius: 8px;
+    font-size: 12.5px; box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+    animation: toastIn 0.25s ease; min-width: 200px;
+  }
+  .toast.success { border-left: 3px solid var(--success); }
+  .toast.error { border-left: 3px solid #e74c3c; }
+  .toast.info { border-left: 3px solid var(--primary); }
+  @keyframes toastIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+  .footer { text-align: center; padding: 30px; color: var(--text-tertiary); font-size: 12px; }
+
+  @media (max-width: 600px) {
+    .plans-grid { grid-template-columns: 1fr 1fr; }
+  }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div class="toast-container" id="toastContainer"></div>
+
+<script>
+const API_BASE = window.location.origin;
+
+// ========== State ==========
+let state = {
+  token: localStorage.getItem('user_token') || null,
+  user: null,
+  view: 'plans', // plans | login | register | orders
+  selectedPlan: null,
+  planType: 'recharge',
+};
+
+// ========== Toast ==========
+function showToast(msg, type = 'info') {
+  const container = document.getElementById('toastContainer');
+  const icons = { success: '✅', error: '❌', info: 'ℹ️', warning: '⚠️' };
+  const toast = document.createElement('div');
+  toast.className = `toast ${type}`;
+  toast.textContent = `${icons[type] || 'ℹ️'} ${msg}`;
+  container.appendChild(toast);
+  setTimeout(() => { toast.style.opacity = '0'; setTimeout(() => toast.remove(), 300); }, 2500);
+}
+
+// ========== API ==========
+async function api(method, path, body) {
+  const opts = { method, headers: { 'Content-Type': 'application/json' } };
+  if (state.token) opts.headers['Authorization'] = `Bearer ${state.token}`;
+  if (body) opts.body = JSON.stringify(body);
+  try {
+    const res = await fetch(`${API_BASE}${path}`, opts);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || '请求失败');
+    return data;
+  } catch (err) {
+    if (err.message.includes('Failed to fetch')) throw new Error('网络连接失败');
+    throw err;
+  }
+}
+
+// ========== Login / Register ==========
+async function doLogin() {
+  const account = document.getElementById('loginAccount').value;
+  const password = document.getElementById('loginPassword').value;
+  if (!account || !password) { showToast('请输入账号和密码', 'warning'); return; }
+  try {
+    const res = await api('POST', '/api/user/login', { account, password });
+    state.token = res.token;
+    state.user = res.user;
+    localStorage.setItem('user_token', res.token);
+    state.view = 'plans';
+    showToast('登录成功', 'success');
+    render();
+  } catch (err) { showToast(err.message, 'error'); }
+}
+
+async function doRegister() {
+  const email = document.getElementById('regEmail').value;
+  const phone = document.getElementById('regPhone').value;
+  const password = document.getElementById('regPassword').value;
+  const invite = document.getElementById('regInvite').value;
+  if (!email && !phone) { showToast('请输入邮箱或手机号', 'warning'); return; }
+  if (password.length < 6) { showToast('密码至少6位', 'warning'); return; }
+  try {
+    const res = await api('POST', '/api/user/register', { email: email || undefined, phone: phone || undefined, password, invite_code: invite || undefined });
+    showToast('注册成功，请登录', 'success');
+    state.view = 'login';
+    render();
+  } catch (err) { showToast(err.message, 'error'); }
+}
+
+function logout() {
+  state.token = null;
+  state.user = null;
+  localStorage.removeItem('user_token');
+  state.view = 'plans';
+  render();
+}
+
+// ========== Create Order ==========
+async function createOrder() {
+  if (!state.user) { showToast('请先登录', 'warning'); return; }
+  if (!state.selectedPlan) { showToast('请选择一个套餐', 'warning'); return; }
+
+  try {
+    const res = await api('POST', '/api/user/create-order', {
+      plan_type: state.planType,
+      plan_value: state.selectedPlan,
+      payment_method: 'manual',
+    });
+    showToast(`订单已创建：${res.order_no}`, 'success');
+    state.selectedPlan = null;
+    state.view = 'orders';
+    render();
+  } catch (err) { showToast(err.message, 'error'); }
+}
+
+// ========== Activate Key ==========
+async function activateKey() {
+  const key = document.getElementById('keyInput').value.trim();
+  if (!key) { showToast('请输入密钥', 'warning'); return; }
+  try {
+    const res = await api('POST', '/api/user/activate', { key_code: key });
+    showToast(`激活成功！到期: ${res.expires_at || '永久'}`, 'success');
+    document.getElementById('keyInput').value = '';
+    // 刷新用户信息
+    const profile = await api('GET', '/api/user/profile');
+    state.user = profile;
+    render();
+  } catch (err) { showToast(err.message, 'error'); }
+}
+
+// ========== Render ==========
+async function render() {
+  const app = document.getElementById('app');
+
+  // 尝试恢复登录
+  if (state.token && !state.user) {
+    try {
+      state.user = await api('GET', '/api/user/profile');
+    } catch { state.token = null; localStorage.removeItem('user_token'); }
+  }
+
+  // 获取套餐
+  let plans = { recharge_rates: [], account_prices: [] };
+  try { plans = await api('GET', '/api/user/plans'); } catch {}
+
+  app.innerHTML = renderHeader() + renderBody(plans) + '<div class="footer">WS多开管理器 · 充值中心</div>';
+}
+
+function renderHeader() {
+  return `
+    <div class="header">
+      <h1>⚡ WS多开管理器</h1>
+      <p>充值中心 · 解锁更多账号和时长</p>
+      <div class="user-info">
+        ${state.user
+          ? `<span>👤 ${state.user.nickname || state.user.email || state.user.phone}</span>
+             <span>账号上限: ${state.user.max_accounts}</span>
+             <span>余额: ¥${(state.user.balance || 0).toFixed(2)}</span>
+             <a class="login-btn" href="#" onclick="event.preventDefault();state.view='orders';render()">📋 我的订单</a>
+             <a class="login-btn" href="#" onclick="event.preventDefault();logout()">退出</a>`
+          : `<span>登录后即可购买套餐</span>
+             <a class="login-btn" href="#" onclick="event.preventDefault();state.view='login';render()">登录</a>
+             <a class="login-btn" href="#" onclick="event.preventDefault();state.view='register';render()">注册</a>`
+        }
+      </div>
+    </div>
+  `;
+}
+
+function renderBody(plans) {
+  if (state.view === 'login') return renderLogin();
+  if (state.view === 'register') return renderRegister();
+  if (state.view === 'orders') return renderOrders();
+
+  return `
+    <div class="container">
+      <!-- 激活密钥 -->
+      <div class="card">
+        <h3>🔑 激活密钥</h3>
+        <p style="font-size:13px;color:var(--text-secondary);margin-bottom:10px">已购买或收到授权密钥？输入激活码立即激活</p>
+        <div class="input-group">
+          <input id="keyInput" placeholder="输入密钥 (WS-XXXX-XXXX-XXXX)" onkeydown="if(event.key==='Enter')activateKey()">
+          <button class="btn btn-primary" onclick="activateKey()" style="width:auto">激活</button>
+        </div>
+      </div>
+
+      <!-- 时长套餐 -->
+      <div class="section-title">⏱️ 时长套餐</div>
+      <div class="plans-grid">
+        ${plans.recharge_rates.map((p, i) => `
+          <div class="plan-card ${state.selectedPlan === p.days && state.planType === 'recharge' ? 'selected' : ''}"
+               onclick="selectPlan('recharge', ${p.days})">
+            ${i === 1 ? '<div class="popular">推荐</div>' : ''}
+            <div class="plan-label">${p.label}</div>
+            <div class="plan-price"><span class="currency">¥</span>${p.price}</div>
+            <div class="plan-desc">${p.days} 天使用时长</div>
+            ${i > 0 ? `<div class="plan-save">省 ${(plans.recharge_rates[0].price * p.days / plans.recharge_rates[0].days - p.price).toFixed(1)} 元</div>` : ''}
+          </div>
+        `).join('')}
+      </div>
+
+      <!-- 账号升级 -->
+      <div class="section-title">📱 账号升级</div>
+      <div class="plans-grid">
+        ${plans.account_prices.map(p => `
+          <div class="plan-card ${state.selectedPlan === p.accounts && state.planType === 'upgrade_accounts' ? 'selected' : ''}"
+               onclick="selectPlan('upgrade_accounts', ${p.accounts})">
+            <div class="plan-label">${p.label}</div>
+            <div class="plan-price"><span class="currency">¥</span>${p.price}</div>
+            <div class="plan-desc">最多 ${p.accounts} 个账号</div>
+          </div>
+        `).join('')}
+      </div>
+
+      <!-- 下单 -->
+      ${state.selectedPlan && state.user ? `
+        <div class="card">
+          <h3>📋 订单确认</h3>
+          <div class="order-summary">
+            <div class="row"><span>套餐</span><span>${state.planType === 'recharge' ? `时长 ${state.selectedPlan} 天` : `账号上限 ${state.selectedPlan} 个`}</span></div>
+            <div class="row total"><span>合计</span><span>¥${calcPrice(plans)}</span></div>
+          </div>
+          <button class="btn btn-primary" onclick="createOrder()" style="margin-top:12px">立即下单（联系客服支付）</button>
+          <div style="font-size:11px;color:var(--text-tertiary);text-align:center;margin-top:6px">💡 下单后联系客服完成支付，系统自动激活</div>
+        </div>
+      ` : state.selectedPlan && !state.user ? `
+        <div class="card" style="text-align:center">
+          <p style="color:var(--text-secondary);margin-bottom:10px">请先登录后下单</p>
+          <button class="btn btn-primary" onclick="state.view='login';render()" style="width:auto;margin:0 auto">登录 / 注册</button>
+        </div>
+      ` : ''}
+    </div>
+  `;
+}
+
+function renderLogin() {
+  return `
+    <div class="login-box">
+      <div class="card">
+        <h2>🔐 登录</h2>
+        <div class="form-group"><label>邮箱 / 手机号</label><input id="loginAccount" placeholder="请输入邮箱或手机号" onkeydown="if(event.key==='Enter')document.getElementById('loginPassword').focus()"></div>
+        <div class="form-group"><label>密码</label><input id="loginPassword" type="password" placeholder="请输入密码" onkeydown="if(event.key==='Enter')doLogin()"></div>
+        <button class="btn btn-primary" onclick="doLogin()">登录</button>
+        <div style="text-align:center"><span class="switch" onclick="state.view='register';render()">没有账号？立即注册</span></div>
+        <div style="text-align:center;margin-top:8px"><span class="switch" onclick="state.view='plans';render()">← 返回首页</span></div>
+      </div>
+    </div>
+  `;
+}
+
+function renderRegister() {
+  return `
+    <div class="login-box">
+      <div class="card">
+        <h2>📝 注册</h2>
+        <div class="form-group"><label>邮箱（选填）</label><input id="regEmail" placeholder="邮箱"></div>
+        <div class="form-group"><label>手机号（选填）</label><input id="regPhone" placeholder="手机号"></div>
+        <div class="form-group"><label>密码</label><input id="regPassword" type="password" placeholder="至少6位"></div>
+        <div class="form-group"><label>邀请码（选填）</label><input id="regInvite" placeholder="如有邀请人请输入"></div>
+        <button class="btn btn-primary" onclick="doRegister()">注册</button>
+        <div style="text-align:center"><span class="switch" onclick="state.view='login';render()">已有账号？立即登录</span></div>
+        <div style="text-align:center;margin-top:8px"><span class="switch" onclick="state.view='plans';render()">← 返回首页</span></div>
+      </div>
+    </div>
+  `;
+}
+
+async function renderOrders() {
+  if (!state.user) { state.view = 'login'; return render(); }
+  let orders = [];
+  try { orders = await api('GET', '/api/user/orders'); } catch {}
+
+  return `
+    <div class="container">
+      <div style="margin-bottom:12px">
+        <button class="btn btn-outline" onclick="state.view='plans';render()" style="padding:6px 14px;font-size:12px">← 返回充值</button>
+      </div>
+      <div class="card">
+        <h3>📋 我的订单</h3>
+        ${orders.length === 0
+          ? '<div style="text-align:center;padding:30px;color:var(--text-secondary)">暂无订单</div>'
+          : `<div class="orders-list">${orders.map(o => `
+            <div class="order-item">
+              <div>
+                <div style="font-weight:500">${o.order_no}</div>
+                <div style="font-size:11px;color:var(--text-tertiary)">${o.type === 'purchase' ? '购买' : o.type} · ¥${(o.amount || 0).toFixed(2)}</div>
+                <div style="font-size:11px;color:var(--text-tertiary)">${o.created_at}</div>
+              </div>
+              <div class="oi-status">
+                <span class="tag ${o.payment_status === 1 ? 'green' : o.payment_status === 2 ? 'red' : o.payment_status === 3 ? 'gray' : 'yellow'}">
+                  ${['未支付','已支付','已退款','已取消'][o.payment_status]}
+                </span>
+                ${o.key_code ? `<div style="font-size:10px;color:var(--text-tertiary);margin-top:2px"><code>${o.key_code.substring(0,16)}...</code></div>` : ''}
+              </div>
+            </div>
+          `).join('')}</div>`
+        }
+      </div>
+    </div>
+  `;
+}
+
+// ========== Utils ==========
+function selectPlan(type, value) {
+  state.planType = type;
+  state.selectedPlan = value;
+  render();
+}
+
+function calcPrice(plans) {
+  if (state.planType === 'recharge') {
+    const p = plans.recharge_rates.find(r => r.days === state.selectedPlan);
+    return p ? p.price.toFixed(2) : '0.00';
+  }
+  const p = plans.account_prices.find(r => r.accounts === state.selectedPlan);
+  return p ? p.price.toFixed(2) : '0.00';
+}
+
+// ========== Init ==========
+render();
+</script>
+</body>
+</html>
