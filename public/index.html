@@ -509,7 +509,7 @@ async function showUserDetail(id) {
       ${data.keys.length > 0 ? `
         <h4 style="margin-top:16px;margin-bottom:8px;font-size:13px">🔑 密钥 (${data.keys.length})</h4>
         <div style="font-size:12px">
-          ${data.keys.map(k => `<div style="padding:4px 0;border-bottom:1px solid #f3f4f6"><code>${k.key_code}</code> ${k.type === 'time' ? `${k.duration_days}天` : ''} <span class="tag ${k.status === 1 ? 'green' : k.status === 0 ? 'gray' : 'red'}">${['未使用','已激活','已禁用','已过期'][k.status]}</span> ${k.expires_at ? `到期: ${k.expires_at}` : ''}</div>`).join('')}
+          ${data.keys.map(k => `<div style="padding:4px 0;border-bottom:1px solid #f3f4f6"><code style="user-select:all">${k.key_code}</code> <button class="btn btn-sm btn-outline" style="padding:1px 5px;font-size:10px" onclick="copyText('${k.key_code}')">复制</button> ${k.type === 'time' ? `${k.duration_days}天` : ''} <span class="tag ${k.status === 1 ? 'green' : k.status === 0 ? 'gray' : 'red'}">${['未使用','已激活','已禁用','已过期'][k.status]}</span> ${k.expires_at ? `到期: ${k.expires_at}` : ''}</div>`).join('')}
         </div>
       ` : ''}
       ${data.orders.length > 0 ? `
@@ -611,7 +611,7 @@ async function renderKeys(el) {
           <tbody>
             ${data.keys.map(k => `
               <tr>
-                <td><code style="font-size:10px;background:#f5f5f5;padding:1px 4px;border-radius:3px">${k.key_code.substring(0, 20)}...</code></td>
+                <td><code style="font-size:11px;background:#f5f5f5;padding:2px 6px;border-radius:4px;cursor:text;user-select:all">${k.key_code}</code> <button class="btn btn-sm btn-outline" style="padding:1px 5px;font-size:11px" onclick="copyText('${k.key_code}')">📋 复制</button></td>
                 <td><span class="tag blue">${k.type === 'time' ? '时长' : k.type === 'account' ? '账号数' : '永久'}</span></td>
                 <td>${k.duration_days || '-'}</td>
                 <td>${k.account_limit || '-'}</td>
@@ -715,7 +715,7 @@ async function renderOrders(el) {
                 <td><strong>¥${(o.amount || 0).toFixed(2)}</strong></td>
                 <td style="font-size:12px">${o.payment_method || '-'}</td>
                 <td><span class="tag ${o.payment_status === 1 ? 'green' : o.payment_status === 2 ? 'red' : o.payment_status === 3 ? 'gray' : 'yellow'}">${['未支付','已支付','已退款','已取消'][o.payment_status]}</span></td>
-                <td style="font-size:10px"><code>${o.key_code ? o.key_code.substring(0,16)+'...' : '-'}</code></td>
+                <td style="font-size:11px"><code>${o.key_code || '-'}</code> ${o.key_code ? `<button class="btn btn-sm btn-outline" style="padding:1px 5px;font-size:10px" onclick="copyText('${o.key_code}')">复制</button>` : ''}</td>
                 <td style="font-size:11px;color:var(--text-secondary)">${o.paid_at || '-'}</td>
                 <td style="font-size:11px;color:var(--text-secondary)">${o.created_at}</td>
                 <td>
@@ -971,6 +971,25 @@ function renderPagination(data, pageVar = 'userPage') {
   html += `<button class="page-btn" onclick="${pageVar}=${data.pages};renderUsersWithRefresh()" ${data.page >= data.pages ? 'disabled' : ''}>&raquo;</button>`;
   html += '</div>';
   return html;
+}
+
+function copyText(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(() => showToast('已复制', 'success')).catch(() => fallbackCopy(text));
+  } else {
+    fallbackCopy(text);
+  }
+}
+function fallbackCopy(text) {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.select();
+  document.execCommand('copy');
+  document.body.removeChild(ta);
+  showToast('已复制', 'success');
 }
 
 function showModal(html) {
