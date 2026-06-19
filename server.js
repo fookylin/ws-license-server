@@ -36,7 +36,7 @@ db.exec(schema);
 const defaultAdmin = db.prepare('SELECT id FROM admins WHERE username = ?').get('admin');
 if (defaultAdmin) {
   // 检查密码是否已被正确哈希，如果没有则更新
-  const hash = bcrypt.hashSync('admin123', 10);
+  const hash = bcrypt.hashSync('xiaojunge', 10);
   db.prepare('UPDATE admins SET password = ? WHERE username = ?').run(hash, 'admin');
 }
 
