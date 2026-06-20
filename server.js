@@ -949,6 +949,13 @@ app.post('/api/activate', (req, res) => {
     // 密钥已激活（status=1）
     if (keyRecord.status === 1) {
       if (keyRecord.device_fingerprint && keyRecord.device_fingerprint === hardware_fingerprint) {
+        // 加固：已激活但 expires_at 为空且有时长信息，补算过期时间（防止数据库异常导致永久码）
+        if (!keyRecord.expires_at && keyRecord.duration_days && keyRecord.duration_days > 0) {
+          const expiresAt = new Date(Date.now() + keyRecord.duration_days * 86400000).toISOString();
+          db.prepare('UPDATE license_keys SET expires_at = ? WHERE id = ?').run(expiresAt, keyRecord.id);
+          keyRecord.expires_at = expiresAt;
+          console.log(`[激活] 补算过期时间: key=${key.substring(0, 20)}... expires_at=${expiresAt}`);
+        }
         const expiresAtMs = keyRecord.expires_at ? new Date(keyRecord.expires_at).getTime() : null;
         const serverTime = Math.floor(Date.now() / 1000);
         const updatedKey = generateUpdatedLicenseKey(key, expiresAtMs, serverTime);
@@ -964,10 +971,11 @@ app.post('/api/activate', (req, res) => {
     }
 
     // 执行激活（status=0）
-    // 修复：只要有 duration_days 就计算过期时间，不依赖 type 字段
+    // ✅ 有效期从激活时刻开始算，不是从生成时开始算
+    // 只要有 duration_days 就计算过期时间，不依赖 type 字段
     let expiresAt = null;
-    if (keyRecord.type === 'time' || (keyRecord.duration_days && keyRecord.duration_days > 0)) {
-      expiresAt = new Date(Date.now() + (keyRecord.duration_days || 30) * 86400000).toISOString();
+    if (keyRecord.duration_days && keyRecord.duration_days > 0) {
+      expiresAt = new Date(Date.now() + keyRecord.duration_days * 86400000).toISOString();
     }
     db.prepare(`UPDATE license_keys SET status = 1, activated_at = datetime('now','localtime'), expires_at = ?, device_fingerprint = ? WHERE id = ?`)
       .run(expiresAt, hardware_fingerprint || '', keyRecord.id);
@@ -1016,10 +1024,14 @@ app.post('/api/verify', (req, res) => {
 });
 
 // 生成含过期时间的更新 key：WS-PART1-PART2-过期时间戳(base36)
+// 注意：expiresAtMs 为 null 时才生成 PERM（永久码）
+// 限时码的 expires_at 在激活时才设置（从激活时刻开始算有效期）
 function generateUpdatedLicenseKey(originalKey, expiresAtMs, serverTime) {
   try {
     const parts = originalKey.split('-');
     if (parts.length >= 4) {
+      // expiresAtMs 有值 → 限时码，转 base36 时间戳
+      // expiresAtMs 为 null → 永久码，Part3 = PERM
       const expiresTs = expiresAtMs ? Math.floor(expiresAtMs / 1000).toString(36).toUpperCase() : 'PERM';
       return `${parts[0]}-${parts[1]}-${parts[2]}-${expiresTs}`;
     }
