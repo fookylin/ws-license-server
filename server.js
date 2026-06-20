@@ -16,11 +16,19 @@ const { v4: uuidv4 } = require('uuid');
 const app = express();
 const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'ws-multi-admin-jwt-secret-2026';
-const DB_PATH = path.join(__dirname, 'data', 'admin.db');
 
-// 确保 data 目录存在
-const dataDir = path.join(__dirname, 'data');
-if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+// ✅ 支持 Render 持久化磁盘：从环境变量读取数据库路径，默认使用本地 data 目录
+// Render Disk 配置：Mount Path = /var/lib/license，环境变量 DB_PATH = /var/lib/license/admin.db
+const DB_PATH = process.env.DB_PATH || path.join(__dirname, 'data', 'admin.db');
+
+// 确保数据库目录存在
+const dbDir = path.dirname(DB_PATH);
+if (!fs.existsSync(dbDir)) {
+  fs.mkdirSync(dbDir, { recursive: true });
+  console.log(`[数据库] 创建数据库目录: ${dbDir}`);
+}
+
+console.log(`[数据库] 使用路径: ${DB_PATH}`);
 
 // ========== 数据库 ==========
 const Database = require('better-sqlite3');
