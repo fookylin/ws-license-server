@@ -98,7 +98,7 @@ function prepareStatement(sqlText) {
     run: (...params) => {
       const finalSql = bindParams(sqlText, params);
       console.log(`[SQL RUN] ${finalSql}`);
-      nativeRun(finalSql);
+      nativeExec(finalSql); // ✅ 用 exec 执行 INSERT/UPDATE/DELETE，避免 run 的兼容性问题
 
       const result = nativeExec('SELECT last_insert_rowid() as lid, changes() as chg');
       const lastInsertRowid = (result[0] && result[0].values[0]) ? result[0].values[0][0] : 0;
@@ -519,4 +519,14 @@ app.listen(PORT, () => {
   console.log(`[服务器] 监听端口: ${PORT}`);
   console.log(`[服务器] 管理后台: http://localhost:${PORT}/admin`);
   console.log(`[数据库] 路径: ${DB_PATH}`);
+});
+
+// 全局错误处理（返回 JSON 便于调试）
+app.use((err, req, res, next) => {
+  console.error('[Express 错误]', err);
+  res.status(500).json({
+    success: false,
+    error: err.message || 'Internal Server Error',
+    stack: process.env.NODE_ENV === 'production' ? undefined : err.stack
+  });
 });
