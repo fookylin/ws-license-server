@@ -86,6 +86,32 @@ function optionalAuth(req, res, next) {
 
 // ========== 工具函数 ==========
 
+// 健康检查端点（无需认证）
+app.get('/api/health', (req, res) => {
+  try {
+    // 检查数据库连接
+    const dbStatus = db.prepare('SELECT 1').get() ? 'ok' : 'error';
+    
+    res.json({
+      status: 'ok',
+      timestamp: new Date().toISOString(),
+      database: DB_PATH,
+      database_status: dbStatus,
+      env: {
+        PORT: process.env.PORT || '(default) 3000',
+        DB_PATH: process.env.DB_PATH || '(default) local data dir',
+        NODE_ENV: process.env.NODE_ENV || 'development'
+      }
+    });
+  } catch (err) {
+    res.status(500).json({
+      status: 'error',
+      error: err.message,
+      database: DB_PATH
+    });
+  }
+});
+
 // 生成授权密钥
 function generateLicenseKey() {
   const prefix = 'WS';
