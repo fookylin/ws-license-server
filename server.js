@@ -949,9 +949,9 @@ app.post('/api/activate', (req, res) => {
     // 密钥已激活（status=1）
     if (keyRecord.status === 1) {
       if (keyRecord.device_fingerprint && keyRecord.device_fingerprint === hardware_fingerprint) {
-        const expiresAt = keyRecord.expires_at ? new Date(keyRecord.expires_at).getTime() : null;
+        const expiresAtMs = keyRecord.expires_at ? new Date(keyRecord.expires_at).getTime() : null;
         const serverTime = Math.floor(Date.now() / 1000);
-        const updatedKey = generateUpdatedLicenseKey(key, expiresAt, serverTime);
+        const updatedKey = generateUpdatedLicenseKey(key, expiresAtMs, serverTime);
         return res.json({
           success: true, message: '激活成功（已绑定本设备）',
           updatedKey, server_time: serverTime,
@@ -964,8 +964,9 @@ app.post('/api/activate', (req, res) => {
     }
 
     // 执行激活（status=0）
+    // 修复：只要有 duration_days 就计算过期时间，不依赖 type 字段
     let expiresAt = null;
-    if (keyRecord.type === 'time') {
+    if (keyRecord.type === 'time' || (keyRecord.duration_days && keyRecord.duration_days > 0)) {
       expiresAt = new Date(Date.now() + (keyRecord.duration_days || 30) * 86400000).toISOString();
     }
     db.prepare(`UPDATE license_keys SET status = 1, activated_at = datetime('now','localtime'), expires_at = ?, device_fingerprint = ? WHERE id = ?`)
