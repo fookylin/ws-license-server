@@ -77,51 +77,41 @@ function saveDatabase() {
 initDatabase();
 
 // ========== sql.js 兼容层（正确实现 better-sqlite3 API）==========
-// 支持 ? 占位符 + 参数绑定
+// 先保存原生 sql.js 方法，避免覆盖后内部递归调用
+const nativeRun = db.run.bind(db);
+const nativeExec = db.exec.bind(db);
+
 function prepareStatement(sqlText) {
+  function bindParams(sql, params) {
+    let paramIndex = 0;
+    return sql.replace(/\?/g, () => {
+      if (paramIndex >= params.length) return '?';
+      const param = params[paramIndex++];
+      if (param === null || param === undefined) return 'NULL';
+      if (typeof param === 'number') return param.toString();
+      if (typeof param === 'boolean') return param ? '1' : '0';
+      return "'" + String(param).replace(/'/g, "''") + "'";
+    });
+  }
+
   return {
     run: (...params) => {
-      // 替换 ? 占位符（按顺序）
-      let finalSql = sqlText;
-      let paramIndex = 0;
-      
-      finalSql = finalSql.replace(/\?/g, () => {
-        if (paramIndex >= params.length) return '?';
-        const param = params[paramIndex++];
-        if (param === null || param === undefined) return 'NULL';
-        if (typeof param === 'number') return param.toString();
-        if (typeof param === 'boolean') return param ? '1' : '0';
-        // 字符串/日期：转义单引号
-        return "'" + String(param).replace(/'/g, "''") + "'";
-      });
-      
+      const finalSql = bindParams(sqlText, params);
       console.log(`[SQL RUN] ${finalSql}`);
-      db.run(finalSql);
-      
-      // 获取 last_insert_rowid 和 changes
-      const result = db.exec('SELECT last_insert_rowid() as lid, changes() as chg');
-      const lastInsertRowid = result[0] ? result[0].values[0][0] : 0;
-      const changes = result[0] ? result[0].values[0][1] : 0;
-      
+      nativeRun(finalSql);
+
+      const result = nativeExec('SELECT last_insert_rowid() as lid, changes() as chg');
+      const lastInsertRowid = (result[0] && result[0].values[0]) ? result[0].values[0][0] : 0;
+      const changes = (result[0] && result[0].values[0]) ? result[0].values[0][1] : 0;
+
       return { lastInsertRowid, changes };
     },
-    
+
     get: (...params) => {
-      let finalSql = sqlText;
-      let paramIndex = 0;
-      
-      finalSql = finalSql.replace(/\?/g, () => {
-        if (paramIndex >= params.length) return '?';
-        const param = params[paramIndex++];
-        if (param === null || param === undefined) return 'NULL';
-        if (typeof param === 'number') return param.toString();
-        if (typeof param === 'boolean') return param ? '1' : '0';
-        return "'" + String(param).replace(/'/g, "''") + "'";
-      });
-      
+      const finalSql = bindParams(sqlText, params);
       console.log(`[SQL GET] ${finalSql}`);
-      const result = db.exec(finalSql);
-      
+      const result = nativeExec(finalSql);
+
       if (result.length > 0 && result[0].values.length > 0) {
         const row = {};
         result[0].columns.forEach((col, index) => {
@@ -131,23 +121,12 @@ function prepareStatement(sqlText) {
       }
       return undefined;
     },
-    
+
     all: (...params) => {
-      let finalSql = sqlText;
-      let paramIndex = 0;
-      
-      finalSql = finalSql.replace(/\?/g, () => {
-        if (paramIndex >= params.length) return '?';
-        const param = params[paramIndex++];
-        if (param === null || param === undefined) return 'NULL';
-        if (typeof param === 'number') return param.toString();
-        if (typeof param === 'boolean') return param ? '1' : '0';
-        return "'" + String(param).replace(/'/g, "''") + "'";
-      });
-      
+      const finalSql = bindParams(sqlText, params);
       console.log(`[SQL ALL] ${finalSql}`);
-      const result = db.exec(finalSql);
-      
+      const result = nativeExec(finalSql);
+
       if (result.length > 0) {
         return result[0].values.map(rowValues => {
           const row = {};
@@ -165,7 +144,7 @@ function prepareStatement(sqlText) {
 // 给 db 对象挂上 prepare 方法（兼容 better-sqlite3）
 db.prepare = prepareStatement;
 
-// 给 db 挂上 get / all 快捷方法（部分代码可能直接用 db.get()）
+// 给 db 挂上 get / all / run 快捷方法（部分代码可能直接用 db.get()）
 db.get = function(sqlText, ...params) {
   return prepareStatement(sqlText).get(...params);
 };
