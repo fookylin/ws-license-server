@@ -77,28 +77,24 @@ function saveDatabase() {
 initDatabase();
 
 // ========== sql.js 兼容层（正确实现 better-sqlite3 API）==========
-// 先保存原生 sql.js 方法，避免覆盖后内部递归调用
-const nativeRun = db.run.bind(db);
+// 保存原生 sql.js Statement prepare 方法
+const nativePrepare = db.prepare.bind(db);
 const nativeExec = db.exec.bind(db);
 
-function prepareStatement(sqlText) {
-  function bindParams(sql, params) {
-    let paramIndex = 0;
-    return sql.replace(/\?/g, () => {
-      if (paramIndex >= params.length) return '?';
-      const param = params[paramIndex++];
-      if (param === null || param === undefined) return 'NULL';
-      if (typeof param === 'number') return param.toString();
-      if (typeof param === 'boolean') return param ? '1' : '0';
-      return "'" + String(param).replace(/'/g, "''") + "'";
-    });
-  }
-
+db.prepare = function(sqlText) {
   return {
     run: (...params) => {
-      const finalSql = bindParams(sqlText, params);
-      console.log(`[SQL RUN] ${finalSql}`);
-      nativeExec(finalSql); // ✅ 用 exec 执行 INSERT/UPDATE/DELETE，避免 run 的兼容性问题
+      // 直接使用 sql.js Statement API：prepare -> bind -> step -> free
+      let stmt;
+      try {
+        stmt = nativePrepare(sqlText);
+        stmt.bind(params);
+        stmt.step();
+        stmt.free();
+      } catch (e) {
+        if (stmt) stmt.free();
+        throw e;
+      }
 
       const result = nativeExec('SELECT last_insert_rowid() as lid, changes() as chg');
       const lastInsertRowid = (result[0] && result[0].values[0]) ? result[0].values[0][0] : 0;
@@ -108,53 +104,52 @@ function prepareStatement(sqlText) {
     },
 
     get: (...params) => {
-      const finalSql = bindParams(sqlText, params);
-      console.log(`[SQL GET] ${finalSql}`);
-      const result = nativeExec(finalSql);
-
-      if (result.length > 0 && result[0].values.length > 0) {
-        const row = {};
-        result[0].columns.forEach((col, index) => {
-          row[col] = result[0].values[0][index];
-        });
-        return row;
+      let stmt;
+      let row = undefined;
+      try {
+        stmt = nativePrepare(sqlText);
+        stmt.bind(params);
+        if (stmt.step()) {
+          row = stmt.getAsObject();
+        }
+        stmt.free();
+      } catch (e) {
+        if (stmt) stmt.free();
+        throw e;
       }
-      return undefined;
+      return row;
     },
 
     all: (...params) => {
-      const finalSql = bindParams(sqlText, params);
-      console.log(`[SQL ALL] ${finalSql}`);
-      const result = nativeExec(finalSql);
-
-      if (result.length > 0) {
-        return result[0].values.map(rowValues => {
-          const row = {};
-          result[0].columns.forEach((col, index) => {
-            row[col] = rowValues[index];
-          });
-          return row;
-        });
+      let stmt;
+      const rows = [];
+      try {
+        stmt = nativePrepare(sqlText);
+        stmt.bind(params);
+        while (stmt.step()) {
+          rows.push(stmt.getAsObject());
+        }
+        stmt.free();
+      } catch (e) {
+        if (stmt) stmt.free();
+        throw e;
       }
-      return [];
+      return rows;
     }
   };
-}
-
-// 给 db 对象挂上 prepare 方法（兼容 better-sqlite3）
-db.prepare = prepareStatement;
+};
 
 // 给 db 挂上 get / all / run 快捷方法（部分代码可能直接用 db.get()）
 db.get = function(sqlText, ...params) {
-  return prepareStatement(sqlText).get(...params);
+  return this.prepare(sqlText).get(...params);
 };
 
 db.all = function(sqlText, ...params) {
-  return prepareStatement(sqlText).all(...params);
+  return this.prepare(sqlText).all(...params);
 };
 
 db.run = function(sqlText, ...params) {
-  return prepareStatement(sqlText).run(...params);
+  return this.prepare(sqlText).run(...params);
 };
 
 // ========== 工具函数 ==========
@@ -513,14 +508,6 @@ app.post('/api/admin/change-password', authenticateToken, (req, res) => {
   res.json({ success: true, message: '密码修改成功' });
 });
 
-// ========== 启动服务器 ==========
-app.listen(PORT, () => {
-  console.log(`[服务器] WS多开管理器后台已启动`);
-  console.log(`[服务器] 监听端口: ${PORT}`);
-  console.log(`[服务器] 管理后台: http://localhost:${PORT}/admin`);
-  console.log(`[数据库] 路径: ${DB_PATH}`);
-});
-
 // 全局错误处理（返回 JSON 便于调试）
 app.use((err, req, res, next) => {
   console.error('[Express 错误]', err);
@@ -529,4 +516,12 @@ app.use((err, req, res, next) => {
     error: err.message || 'Internal Server Error',
     stack: process.env.NODE_ENV === 'production' ? undefined : err.stack
   });
+});
+
+// ========== 启动服务器 ==========
+app.listen(PORT, () => {
+  console.log(`[服务器] WS多开管理器后台已启动`);
+  console.log(`[服务器] 监听端口: ${PORT}`);
+  console.log(`[服务器] 管理后台: http://localhost:${PORT}/admin`);
+  console.log(`[数据库] 路径: ${DB_PATH}`);
 });
