@@ -3,6 +3,7 @@ data/
 *.db
 *.db-shm
 *.db-wal
+!data/admin.db.backup
 change_pwd.js
 package-lock.json
 *.log
