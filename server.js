@@ -298,10 +298,10 @@ app.post('/api/admin/keys/generate', authenticateToken, (req, res) => {
       VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
     `);
     
-    const result = stmt.run(key, normalizedKey, type, duration_days, note, now, expiresAt, null);
+    const result = stmt.run(key, normalizedKey, type, duration_days, note, now, expiresAt);
     
     if (result.changes === 0) {
-      throw new Error('生成密钥失败');
+      throw new Error(`生成密钥失败: lastInsertRowid=${result.lastInsertRowid}, changes=${result.changes}`);
     }
     
     const newKey = db.get('SELECT * FROM keys WHERE id = ?', result.lastInsertRowid);
