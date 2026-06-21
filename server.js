@@ -1,6 +1,5 @@
-﻿/**
- * WS多开管理器 — 后台服务端 (修复版：使用 sql.js)
- * Express + sql.js + JWT 认证
+/**
+ * WS多开管理器 — 后台服务端 (sql.js 版，匹配 schema.sql)
  */
 
 const express = require('express');
@@ -13,150 +12,101 @@ const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
 const initSqlJs = require('sql.js');
 
-// ========== 初始化 ==========
 const app = express();
 const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'ws-multi-admin-jwt-secret-2026';
-
-// ✅ 支持 Render 持久化磁盘
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, 'data', 'admin.db');
 
 // 确保数据库目录存在
 const dbDir = path.dirname(DB_PATH);
 if (!fs.existsSync(dbDir)) {
   fs.mkdirSync(dbDir, { recursive: true });
-  console.log(`[数据库] 创建数据库目录: ${dbDir}`);
 }
 
-console.log(`[数据库] 使用路径: ${DB_PATH}`);
-
-// ========== 数据库 (使用 sql.js) ==========
 let db;
 
-// 初始化数据库
-async function initDatabase() {
-  sql = await initSqlJs();
-  
-  if (fs.existsSync(DB_PATH)) {
-    console.log('[数据库] 从磁盘加载现有数据库');
-    const buffer = fs.readFileSync(DB_PATH);
-    db = new sql.Database(buffer);
-  } else {
-    console.log('[数据库] 创建新数据库');
-    db = new sql.Database();
-  }
-  
-  // 保存原生 sql.js Statement prepare 方法
-  nativePrepare = db.prepare.bind(db);
-  nativeExec = db.exec.bind(db);
-  
-  // 初始化 schema
-  const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
-  db.exec(schema);
-  
-  // 修正默认 admin 密码
-  const admins = db.exec("SELECT id FROM admins WHERE username = 'admin'");
-  if (admins.length > 0 && admins[0].values.length > 0) {
-    const hash = bcrypt.hashSync('xiaojunge', 10);
-    // 直接 exec UPDATE
-    db.run(`UPDATE admins SET password = '${hash}' WHERE username = 'admin'`);
-    saveDatabase();
-  }
-  
-  console.log('[数据库] 初始化完成');
-  saveDatabase();
-}
-
-// 保存数据库到磁盘
 function saveDatabase() {
   try {
     const data = db.export();
-    const buffer = Buffer.from(data);
-    fs.writeFileSync(DB_PATH, buffer);
-    console.log('[数据库] 已保存到磁盘');
+    fs.writeFileSync(DB_PATH, Buffer.from(data));
   } catch (e) {
     console.error('[数据库] 保存失败:', e.message);
   }
 }
 
-// 初始化
-
-// ========== sql.js 兼容层（正确实现 better-sqlite3 API）==========
-// 保存原生 sql.js Statement prepare 方法
-let sql;
-let nativePrepare;
-let nativeExec;
-
-db.prepare = function(sqlText) {
-  return {
-    run: (...params) => {
-      // 直接使用 sql.js Statement API：prepare -> bind -> step -> free
-      let stmt;
-      try {
-        stmt = nativePrepare(sqlText);
-        stmt.bind(params);
-        stmt.step();
-        stmt.free();
-      } catch (e) {
-        if (stmt) stmt.free();
-        throw e;
+async function initDatabase() {
+  const SQL = await initSqlJs();
+  
+  if (fs.existsSync(DB_PATH)) {
+    console.log('[数据库] 从磁盘加载');
+    db = new SQL.Database(fs.readFileSync(DB_PATH));
+  } else {
+    console.log('[数据库] 创建新数据库');
+    db = new SQL.Database();
+  }
+  
+  // 保存原生方法
+  const _prepare = db.prepare.bind(db);
+  const _exec = db.exec.bind(db);
+  
+  // 兼容层：模拟 better-sqlite3 的 prepare().run()/get()/all()
+  db.prepare = function(sqlText) {
+    return {
+      run: (...params) => {
+        let stmt;
+        try {
+          stmt = _prepare(sqlText);
+          if (params.length > 0) stmt.bind(params);
+          stmt.step();
+          stmt.free();
+        } catch (e) { if (stmt) stmt.free(); throw e; }
+        const r = _exec('SELECT last_insert_rowid() as lid, changes() as chg');
+        const lid = (r[0] && r[0].values[0]) ? r[0].values[0][0] : 0;
+        const chg = (r[0] && r[0].values[0]) ? r[0].values[0][1] : 0;
+        return { lastInsertRowid: lid, changes: chg };
+      },
+      get: (...params) => {
+        let stmt, row;
+        try {
+          stmt = _prepare(sqlText);
+          if (params.length > 0) stmt.bind(params);
+          if (stmt.step()) row = stmt.getAsObject();
+          stmt.free();
+        } catch (e) { if (stmt) stmt.free(); throw e; }
+        return row;
+      },
+      all: (...params) => {
+        let stmt;
+        const rows = [];
+        try {
+          stmt = _prepare(sqlText);
+          if (params.length > 0) stmt.bind(params);
+          while (stmt.step()) rows.push(stmt.getAsObject());
+          stmt.free();
+        } catch (e) { if (stmt) stmt.free(); throw e; }
+        return rows;
       }
-
-      const result = nativeExec('SELECT last_insert_rowid() as lid, changes() as chg');
-      const lastInsertRowid = (result[0] && result[0].values[0]) ? result[0].values[0][0] : 0;
-      const changes = (result[0] && result[0].values[0]) ? result[0].values[0][1] : 0;
-
-      return { lastInsertRowid, changes };
-    },
-
-    get: (...params) => {
-      let stmt;
-      let row = undefined;
-      try {
-        stmt = nativePrepare(sqlText);
-        stmt.bind(params);
-        if (stmt.step()) {
-          row = stmt.getAsObject();
-        }
-        stmt.free();
-      } catch (e) {
-        if (stmt) stmt.free();
-        throw e;
-      }
-      return row;
-    },
-
-    all: (...params) => {
-      let stmt;
-      const rows = [];
-      try {
-        stmt = nativePrepare(sqlText);
-        stmt.bind(params);
-        while (stmt.step()) {
-          rows.push(stmt.getAsObject());
-        }
-        stmt.free();
-      } catch (e) {
-        if (stmt) stmt.free();
-        throw e;
-      }
-      return rows;
-    }
+    };
   };
-};
-
-// 给 db 挂上 get / all / run 快捷方法（部分代码可能直接用 db.get()）
-db.get = function(sqlText, ...params) {
-  return this.prepare(sqlText).get(...params);
-};
-
-db.all = function(sqlText, ...params) {
-  return this.prepare(sqlText).all(...params);
-};
-
-db.run = function(sqlText, ...params) {
-  return this.prepare(sqlText).run(...params);
-};
+  db.get = (sql, ...p) => db.prepare(sql).get(...p);
+  db.all = (sql, ...p) => db.prepare(sql).all(...p);
+  db.run = (sql, ...p) => db.prepare(sql).run(...p);
+  
+  // 初始化 schema
+  const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
+  db.exec(schema);
+  
+  // 修正 admin 密码
+  try {
+    const hash = bcrypt.hashSync('xiaojunge', 10);
+    db.run(`UPDATE admins SET password = '${hash}' WHERE username = 'admin'`);
+  } catch (e) {
+    console.error('[数据库] 设置密码失败:', e.message);
+  }
+  
+  saveDatabase();
+  console.log('[数据库] 初始化完成');
+}
 
 // ========== 工具函数 ==========
 function normalizeKeyForDb(key) {
@@ -164,26 +114,10 @@ function normalizeKeyForDb(key) {
 }
 
 function generateLicenseKey(prefix = 'WS') {
-  const part1 = crypto.randomBytes(2).toString('hex').toUpperCase();
-  const part2 = crypto.randomBytes(2).toString('hex').toUpperCase();
-  const part3 = crypto.randomBytes(2).toString('hex').toUpperCase();
-  return `${prefix}-${part1}-${part2}-${part3}`;
-}
-
-function generateUpdatedLicenseKey(baseKey, expiresAtMs = null) {
-  const cleanBase = baseKey.toUpperCase().replace(/-/g, '');
-  const prefix = cleanBase.substring(0, 2);
-  const part1 = cleanBase.substring(2, 6);
-  const part2 = cleanBase.substring(6, 10);
-  
-  if (expiresAtMs === null || expiresAtMs === 'PERM') {
-    return `${prefix}-${part1}-${part2}-PERM`;
-  }
-  
-  const date = new Date(expiresAtMs);
-  const month = (date.getMonth() + 1).toString().padStart(2, '0');
-  const day = date.getDate().toString().padStart(2, '0');
-  return `${prefix}-${part1}-${part2}-${month}${day}`;
+  const p1 = crypto.randomBytes(2).toString('hex').toUpperCase();
+  const p2 = crypto.randomBytes(2).toString('hex').toUpperCase();
+  const p3 = crypto.randomBytes(2).toString('hex').toUpperCase();
+  return `${prefix}-${p1}-${p2}-${p3}`;
 }
 
 // ========== 中间件 ==========
@@ -191,13 +125,10 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// ========== 认证中间件 ==========
 function authenticateToken(req, res, next) {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
-  
   if (!token) return res.sendStatus(401);
-  
   jwt.verify(token, JWT_SECRET, (err, user) => {
     if (err) return res.sendStatus(403);
     req.user = user;
@@ -207,333 +138,192 @@ function authenticateToken(req, res, next) {
 
 // ========== 路由 ==========
 
-// --- 健康检查 ---
 app.get('/api/health', (req, res) => {
   try {
-    const result = db.get('SELECT COUNT(*) as count FROM keys');
-    res.json({
-      status: 'ok',
-      timestamp: new Date().toISOString(),
-      database: 'connected',
-      database_status: 'ok',
-      env: process.env.NODE_ENV || 'production'
-    });
+    db.get('SELECT COUNT(*) as count FROM license_keys');
+    res.json({ status: 'ok', timestamp: new Date().toISOString(), database: 'connected' });
   } catch (e) {
     res.status(500).json({ status: 'error', message: e.message });
   }
 });
 
-// --- 登录 ---
 app.post('/api/admin/login', (req, res) => {
   const { username, password } = req.body;
-  
-  if (!username || !password) {
-    return res.status(400).json({ success: false, message: '用户名和密码不能为空' });
-  }
+  if (!username || !password) return res.status(400).json({ success: false, message: '用户名和密码不能为空' });
   
   const admin = db.get('SELECT * FROM admins WHERE username = ?', username);
+  if (!admin) return res.status(401).json({ success: false, message: '用户名或密码错误' });
+  if (!bcrypt.compareSync(password, admin.password)) return res.status(401).json({ success: false, message: '用户名或密码错误' });
   
-  if (!admin) {
-    return res.status(401).json({ success: false, message: '用户名或密码错误' });
-  }
-  
-  const validPassword = bcrypt.compareSync(password, admin.password);
-  if (!validPassword) {
-    return res.status(401).json({ success: false, message: '用户名或密码错误' });
-  }
-  
-  const token = jwt.sign(
-    { id: admin.id, username: admin.username },
-    JWT_SECRET,
-    { expiresIn: '24h' }
-  );
-  
+  const token = jwt.sign({ id: admin.id, username: admin.username }, JWT_SECRET, { expiresIn: '24h' });
   res.json({ success: true, token });
 });
 
-// --- 获取密钥列表（分页） ---
+// 获取密钥列表
 app.get('/api/admin/keys', authenticateToken, (req, res) => {
   const page = parseInt(req.query.page) || 1;
   const limit = parseInt(req.query.limit) || 20;
   const offset = (page - 1) * limit;
   
-  const keys = db.all(
-    'SELECT * FROM keys ORDER BY created_at DESC LIMIT ? OFFSET ?',
-    limit, offset
-  );
+  const keys = db.all('SELECT * FROM license_keys ORDER BY created_at DESC LIMIT ? OFFSET ?', limit, offset);
+  const total = db.get('SELECT COUNT(*) as count FROM license_keys').count;
   
-  const totalResult = db.get('SELECT COUNT(*) as count FROM keys');
-  const total = totalResult.count;
-  const totalPages = Math.ceil(total / limit);
-  
-  res.json({
-    success: true,
-    keys,
-    pagination: {
-      page,
-      limit,
-      total,
-      totalPages
-    }
-  });
+  res.json({ success: true, keys, pagination: { page, limit, total, totalPages: Math.ceil(total / limit) } });
 });
 
-// --- 生成密钥 ---
+// 生成密钥
 app.post('/api/admin/keys/generate', authenticateToken, (req, res) => {
-  const { count = 1, type = 'time', duration_days = 30, note = '' } = req.body;
-  
-  if (count < 1 || count > 100) {
-    return res.status(400).json({ success: false, message: '数量必须在 1-100 之间' });
-  }
-  
-  const results = [];
-  
-  for (let i = 0; i < count; i++) {
-    const key = generateLicenseKey('WS');
-    const normalizedKey = normalizeKeyForDb(key);
-    const now = new Date().toISOString();
+  try {
+    const { count = 1, type = 'time', duration_days = 30, note = '' } = req.body;
+    if (count < 1 || count > 100) return res.status(400).json({ success: false, message: '数量必须在 1-100 之间' });
     
-    // 计算过期时间（从生成时刻算起）
-    let expiresAt = null;
-    if (type === 'time' && duration_days > 0) {
-      expiresAt = new Date(Date.now() + duration_days * 24 * 60 * 60 * 1000).toISOString();
+    const results = [];
+    for (let i = 0; i < count; i++) {
+      const key = generateLicenseKey('WS');
+      const now = new Date().toISOString();
+      
+      // 匹配 schema: license_keys 表，字段 key_code, type, duration_days, remark, status, created_by
+      const stmt = db.prepare(`
+        INSERT INTO license_keys (key_code, type, duration_days, remark, status, price, created_by)
+        VALUES (?, ?, ?, ?, 0, 0, ?)
+      `);
+      const result = stmt.run(key, type, duration_days, note, req.user.id);
+      const newKey = db.get('SELECT * FROM license_keys WHERE id = ?', result.lastInsertRowid);
+      results.push(newKey);
     }
-    
-    const stmt = db.prepare(`
-      INSERT INTO keys (key, normalized_key, type, duration_days, note, created_at, expires_at, updated_key)
-      VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
-    `);
-    
-    const result = stmt.run(key, normalizedKey, type, duration_days, note, now, expiresAt);
-    
-    if (result.changes === 0) {
-      throw new Error(`生成密钥失败: lastInsertRowid=${result.lastInsertRowid}, changes=${result.changes}`);
-    }
-    
-    const newKey = db.get('SELECT * FROM keys WHERE id = ?', result.lastInsertRowid);
-    results.push(newKey);
+    saveDatabase();
+    res.json({ success: true, keys: results });
+  } catch (err) {
+    console.error('[生成密钥] 错误:', err);
+    res.status(500).json({ success: false, error: '生成密钥失败: ' + err.message });
   }
-  
-  saveDatabase();
-  
-  res.json({ success: true, keys: results });
 });
 
-// --- 激活密钥 ---
+// 激活密钥
 app.post('/api/activate', (req, res) => {
   const { key, machine_code, version = '2.0' } = req.body;
-  
-  if (!key || !machine_code) {
-    return res.status(400).json({ success: false, error: '密钥和机器码不能为空' });
-  }
+  if (!key || !machine_code) return res.status(400).json({ success: false, error: '密钥和机器码不能为空' });
   
   const normalizedKey = normalizeKeyForDb(key);
-  const keyRecord = db.get(
-    'SELECT * FROM keys WHERE normalized_key = ? OR key LIKE ?',
-    normalizedKey, `%${normalizedKey.substring(0, 8)}%`
-  );
+  // 用 key_code 查找，支持模糊匹配
+  const keyRecord = db.get('SELECT * FROM license_keys WHERE key_code = ?', key);
   
-  if (!keyRecord) {
-    return res.json({ success: false, error: '密钥不存在' });
-  }
+  if (!keyRecord) return res.json({ success: false, error: '密钥不存在' });
+  if (keyRecord.status === 2) return res.json({ success: false, error: '密钥已被禁用' });
+  if (keyRecord.status === 3) return res.json({ success: false, error: '密钥已过期' });
   
-  if (keyRecord.is_disabled) {
-    return res.json({ success: false, error: '密钥已被禁用' });
-  }
-  
-  if (keyRecord.used_count >= keyRecord.max_devices) {
-    return res.json({ success: false, error: '激活次数已达上限' });
-  }
-  
-  // 检查是否过期（永久密钥 type=PERM 或 expires_at 为空）
-  if (keyRecord.type !== 'PERM' && keyRecord.expires_at) {
-    const expiryDate = new Date(keyRecord.expires_at);
-    if (Date.now() > expiryDate.getTime()) {
+  // 检查过期
+  if (keyRecord.type !== 'permanent' && keyRecord.expires_at) {
+    if (Date.now() > new Date(keyRecord.expires_at).getTime()) {
+      db.run('UPDATE license_keys SET status = 3 WHERE id = ?', keyRecord.id);
+      saveDatabase();
       return res.json({ success: false, error: '密钥已过期' });
     }
   }
   
-  // 记录激活
-  const now = new Date().toISOString();
-  const stmt = db.prepare(`
-    INSERT INTO activations (key_id, machine_code, activated_at, version)
-    VALUES (?, ?, ?, ?)
-  `);
-  stmt.run(keyRecord.id, machine_code, now, version);
-  
-  // 更新使用次数
-  db.run(
-    'UPDATE keys SET used_count = used_count + 1 WHERE id = ?',
-    keyRecord.id
-  );
-  
-  // 如果是首次激活且有 duration_days，设置 expires_at
-  if (!keyRecord.expires_at && keyRecord.duration_days > 0) {
-    const expiresAt = new Date(Date.now() + keyRecord.duration_days * 24 * 60 * 60 * 1000).toISOString();
-    db.run('UPDATE keys SET expires_at = ? WHERE id = ?', expiresAt, keyRecord.id);
+  // 首次激活：设置 expires_at 和设备指纹
+  if (keyRecord.status === 0) {
+    let expiresAt = null;
+    if (keyRecord.type === 'time' && keyRecord.duration_days > 0) {
+      expiresAt = new Date(Date.now() + keyRecord.duration_days * 24 * 60 * 60 * 1000).toISOString();
+    }
+    db.run('UPDATE license_keys SET status = 1, activated_at = ?, expires_at = ?, device_fingerprint = ? WHERE id = ?',
+      new Date().toISOString(), expiresAt, machine_code, keyRecord.id);
   }
   
   saveDatabase();
-  
-  // 返回激活信息
-  const updatedKeyRecord = db.get('SELECT * FROM keys WHERE id = ?', keyRecord.id);
-  const expiresAt = updatedKeyRecord.expires_at ? new Date(updatedKeyRecord.expires_at).getTime() : null;
+  const updated = db.get('SELECT * FROM license_keys WHERE id = ?', keyRecord.id);
   
   res.json({
     success: true,
-    key: updatedKeyRecord.key,
-    type: updatedKeyRecord.type,
-    expires_at: expiresAt,
+    key: updated.key_code,
+    type: updated.type,
+    expires_at: updated.expires_at ? new Date(updated.expires_at).getTime() : null,
     message: '激活成功'
   });
 });
 
-// --- 验证密钥 ---
+// 验证密钥
 app.post('/api/verify', (req, res) => {
   const { key, machine_code, version = '2.0' } = req.body;
+  if (!key || !machine_code) return res.status(400).json({ success: false, error: '密钥和机器码不能为空' });
   
-  if (!key || !machine_code) {
-    return res.status(400).json({ success: false, error: '密钥和机器码不能为空' });
+  const keyRecord = db.get('SELECT * FROM license_keys WHERE key_code = ?', key);
+  if (!keyRecord) return res.json({ success: false, error: '密钥不存在' });
+  if (keyRecord.status === 2) return res.json({ success: false, error: '密钥已被禁用' });
+  if (keyRecord.status === 3) return res.json({ success: false, error: '密钥已过期' });
+  
+  // 验证设备指纹
+  if (keyRecord.device_fingerprint && keyRecord.device_fingerprint !== machine_code) {
+    return res.json({ success: false, error: '机器码不匹配' });
   }
   
-  const normalizedKey = normalizeKeyForDb(key);
-  const keyRecord = db.get(
-    'SELECT * FROM keys WHERE normalized_key = ? OR key LIKE ?',
-    normalizedKey, `%${normalizedKey.substring(0, 8)}%`
-  );
-  
-  if (!keyRecord) {
-    return res.json({ success: false, error: '密钥不存在' });
-  }
-  
-  if (keyRecord.is_disabled) {
-    return res.json({ success: false, error: '密钥已被禁用' });
-  }
-  
-  // 检查是否过期
-  if (keyRecord.type !== 'PERM' && keyRecord.expires_at) {
-    const expiryDate = new Date(keyRecord.expires_at);
-    if (Date.now() > expiryDate.getTime()) {
+  // 检查过期
+  if (keyRecord.type !== 'permanent' && keyRecord.expires_at) {
+    if (Date.now() > new Date(keyRecord.expires_at).getTime()) {
+      db.run('UPDATE license_keys SET status = 3 WHERE id = ?', keyRecord.id);
+      saveDatabase();
       return res.json({ success: false, error: '密钥已过期' });
     }
   }
   
-  // 检查机器码是否匹配
-  const activation = db.get(
-    'SELECT * FROM activations WHERE key_id = ? AND machine_code = ?',
-    keyRecord.id, machine_code
-  );
-  
-  if (!activation) {
-    return res.json({ success: false, error: '机器码不匹配，请联系管理员' });
-  }
-  
-  // 更新最后验证时间
-  const now = new Date().toISOString();
-  db.run(
-    'UPDATE activations SET last_verified_at = ? WHERE id = ?',
-    now, activation.id
-  );
-  saveDatabase();
-  
   res.json({
     success: true,
-    key: keyRecord.key,
+    key: keyRecord.key_code,
     type: keyRecord.type,
     expires_at: keyRecord.expires_at ? new Date(keyRecord.expires_at).getTime() : null,
     message: '验证成功'
   });
 });
 
-// --- 禁用/启用密钥 ---
+// 禁用/启用密钥
 app.post('/api/admin/keys/:id/toggle', authenticateToken, (req, res) => {
-  const { id } = req.params;
-  const keyRecord = db.get('SELECT * FROM keys WHERE id = ?', id);
-  
-  if (!keyRecord) {
-    return res.status(404).json({ success: false, message: '密钥不存在' });
-  }
-  
-  const newStatus = keyRecord.is_disabled ? 0 : 1;
-  db.run('UPDATE keys SET is_disabled = ? WHERE id = ?', newStatus, id);
+  const keyRecord = db.get('SELECT * FROM license_keys WHERE id = ?', req.params.id);
+  if (!keyRecord) return res.status(404).json({ success: false, message: '密钥不存在' });
+  const newStatus = keyRecord.status === 2 ? 1 : 2;
+  db.run('UPDATE license_keys SET status = ? WHERE id = ?', newStatus, req.params.id);
   saveDatabase();
-  
-  res.json({ success: true, disabled: !!newStatus });
+  res.json({ success: true, status: newStatus });
 });
 
-// --- 删除密钥 ---
+// 删除密钥
 app.delete('/api/admin/keys/:id', authenticateToken, (req, res) => {
-  const { id } = req.params;
-  
-  const stmt = db.prepare('DELETE FROM keys WHERE id = ?');
-  const result = stmt.run(id);
-  
-  if (result.changes === 0) {
-    return res.status(404).json({ success: false, message: '密钥不存在' });
-  }
-  
+  const result = db.prepare('DELETE FROM license_keys WHERE id = ?').run(req.params.id);
+  if (result.changes === 0) return res.status(404).json({ success: false, message: '密钥不存在' });
   saveDatabase();
   res.json({ success: true });
 });
 
-// --- 获取统计数据 ---
+// 统计
 app.get('/api/admin/stats', authenticateToken, (req, res) => {
-  const totalKeys = db.get('SELECT COUNT(*) as count FROM keys').count;
-  const activeKeys = db.get("SELECT COUNT(*) as count FROM keys WHERE is_disabled = 0").count;
-  const totalActivations = db.get('SELECT COUNT(*) as count FROM activations').count;
-  
-  res.json({
-    success: true,
-    stats: {
-      totalKeys,
-      activeKeys,
-      totalActivations
-    }
-  });
+  const totalKeys = db.get('SELECT COUNT(*) as count FROM license_keys').count;
+  const activeKeys = db.get("SELECT COUNT(*) as count FROM license_keys WHERE status = 1").count;
+  res.json({ success: true, stats: { totalKeys, activeKeys, totalActivations: 0 } });
 });
 
-// --- 修改密码 ---
+// 修改密码
 app.post('/api/admin/change-password', authenticateToken, (req, res) => {
   const { oldPassword, newPassword } = req.body;
-  
-  if (!oldPassword || !newPassword) {
-    return res.status(400).json({ success: false, message: '旧密码和新密码不能为空' });
-  }
-  
+  if (!oldPassword || !newPassword) return res.status(400).json({ success: false, message: '不能为空' });
   const admin = db.get('SELECT * FROM admins WHERE id = ?', req.user.id);
-  
-  const validPassword = bcrypt.compareSync(oldPassword, admin.password);
-  if (!validPassword) {
-    return res.status(400).json({ success: false, message: '旧密码错误' });
-  }
-  
-  const hash = bcrypt.hashSync(newPassword, 10);
-  db.run('UPDATE admins SET password = ? WHERE id = ?', hash, req.user.id);
+  if (!bcrypt.compareSync(oldPassword, admin.password)) return res.status(400).json({ success: false, message: '旧密码错误' });
+  db.run('UPDATE admins SET password = ? WHERE id = ?', bcrypt.hashSync(newPassword, 10), req.user.id);
   saveDatabase();
-  
   res.json({ success: true, message: '密码修改成功' });
 });
 
-// 全局错误处理（返回 JSON 便于调试）
+// 全局错误处理
 app.use((err, req, res, next) => {
   console.error('[Express 错误]', err);
-  res.status(500).json({
-    success: false,
-    error: err.message || 'Internal Server Error',
-    stack: process.env.NODE_ENV === 'production' ? undefined : err.stack
-  });
+  res.status(500).json({ success: false, error: err.message || 'Internal Server Error' });
 });
 
-// 异步初始化数据库并启动服务
+// 启动
 initDatabase().then(() => {
-  // ========== 启动服务器 ==========
   app.listen(PORT, () => {
-    console.log(`[服务器] WS多开管理器后台已启动`);
-    console.log(`[服务器] 监听端口: ${PORT}`);
-    console.log(`[服务器] 管理后台: http://localhost:${PORT}/admin`);
-    console.log(`[数据库] 路径: ${DB_PATH}`);
+    console.log(`[服务器] WS多开管理器后台已启动 端口:${PORT}`);
   });
 }).catch(err => {
-  console.error('[服务器] 数据库初始化失败:', err);
+  console.error('[服务器] 初始化失败:', err);
   process.exit(1);
 });
