@@ -1,4 +1,4 @@
-/**
+﻿/**
  * WS多开管理器 — 后台服务端 (修复版：使用 sql.js)
  * Express + sql.js + JWT 认证
  */
@@ -11,7 +11,7 @@ const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
-const sql = require('sql.js');
+const initSqlJs = require('sql.js');
 
 // ========== 初始化 ==========
 const app = express();
@@ -34,7 +34,9 @@ console.log(`[数据库] 使用路径: ${DB_PATH}`);
 let db;
 
 // 初始化数据库
-function initDatabase() {
+async function initDatabase() {
+  sql = await initSqlJs();
+  
   if (fs.existsSync(DB_PATH)) {
     console.log('[数据库] 从磁盘加载现有数据库');
     const buffer = fs.readFileSync(DB_PATH);
@@ -43,6 +45,10 @@ function initDatabase() {
     console.log('[数据库] 创建新数据库');
     db = new sql.Database();
   }
+  
+  // 保存原生 sql.js Statement prepare 方法
+  nativePrepare = db.prepare.bind(db);
+  nativeExec = db.exec.bind(db);
   
   // 初始化 schema
   const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
@@ -74,12 +80,12 @@ function saveDatabase() {
 }
 
 // 初始化
-initDatabase();
 
 // ========== sql.js 兼容层（正确实现 better-sqlite3 API）==========
 // 保存原生 sql.js Statement prepare 方法
-const nativePrepare = db.prepare.bind(db);
-const nativeExec = db.exec.bind(db);
+let sql;
+let nativePrepare;
+let nativeExec;
 
 db.prepare = function(sqlText) {
   return {
@@ -518,10 +524,16 @@ app.use((err, req, res, next) => {
   });
 });
 
-// ========== 启动服务器 ==========
-app.listen(PORT, () => {
-  console.log(`[服务器] WS多开管理器后台已启动`);
-  console.log(`[服务器] 监听端口: ${PORT}`);
-  console.log(`[服务器] 管理后台: http://localhost:${PORT}/admin`);
-  console.log(`[数据库] 路径: ${DB_PATH}`);
+// 异步初始化数据库并启动服务
+initDatabase().then(() => {
+  // ========== 启动服务器 ==========
+  app.listen(PORT, () => {
+    console.log(`[服务器] WS多开管理器后台已启动`);
+    console.log(`[服务器] 监听端口: ${PORT}`);
+    console.log(`[服务器] 管理后台: http://localhost:${PORT}/admin`);
+    console.log(`[数据库] 路径: ${DB_PATH}`);
+  });
+}).catch(err => {
+  console.error('[服务器] 数据库初始化失败:', err);
+  process.exit(1);
 });
