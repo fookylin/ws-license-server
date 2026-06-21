@@ -123,6 +123,11 @@ function generateLicenseKey(prefix = 'WS') {
 // ========== 中间件 ==========
 app.use(cors());
 app.use(express.json());
+
+// 兼容旧书签：/admin 或 /admin/ → /
+app.get('/admin', (req, res) => res.redirect('/'));
+app.get('/admin/', (req, res) => res.redirect('/'));
+
 app.use(express.static(path.join(__dirname, 'public')));
 
 function authenticateToken(req, res, next) {
