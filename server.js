@@ -105,12 +105,114 @@ async function backupToGitHub() {
   }
 }
 
+async function restoreFromGitHub(SQL) {
+  if (!GITHUB_TOKEN) return false;
+  try {
+    console.log('[数据库] 尝试从 GitHub 恢复备份...');
+    const result = await githubApi('GET', `/repos/${GITHUB_REPO}/contents/${BACKUP_PATH}?ref=${BACKUP_BRANCH}`);
+    if (result.status !== 200) {
+      console.log('[数据库] GitHub 无备份文件');
+      return false;
+    }
+    const content = Buffer.from(result.body.content, 'base64').toString('utf8');
+    const backup = JSON.parse(content);
+    
+    // 创建内存数据库并导入数据
+    db = new SQL.Database();
+    
+    // 初始化 schema
+    const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
+    db.exec(schema);
+    
+    // 恢复 license_keys
+    if (backup.license_keys && backup.license_keys.length > 0) {
+      const stmt = db.prepare(`INSERT INTO license_keys 
+        (id, key_code, type, duration_days, account_limit, status, price, user_id, order_id, device_fingerprint, activated_at, expires_at, remark, created_by, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+      for (const k of backup.license_keys) {
+        stmt.run(k.id, k.key_code, k.type, k.duration_days, k.account_limit, k.status, k.price, k.user_id, k.order_id, k.device_fingerprint, k.activated_at, k.expires_at, k.remark, k.created_by, k.created_at);
+      }
+      console.log(`[数据库] 恢复 ${backup.license_keys.length} 条密钥`);
+    }
+    
+    // 恢复 admins（保留默认 admin 密码）
+    if (backup.admins && backup.admins.length > 0) {
+      // 先删除默认 admin，再恢复备份的
+      db.run("DELETE FROM admins WHERE username = 'admin'");
+      const stmt = db.prepare(`INSERT INTO admins (id, username, password, role, nickname, status, last_login_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
+      let restoredAdmins = 0;
+      for (const a of backup.admins) {
+        if (!a.username) continue; // 跳过无效数据
+        stmt.run(a.id, a.username, a.password, a.role, a.nickname || '', a.status, a.last_login_at, a.created_at);
+        restoredAdmins++;
+      }
+      // 确保 admin 密码正确
+      const hash = bcrypt.hashSync('xiaojunge', 10);
+      db.run(`UPDATE admins SET password = '${hash}' WHERE username = 'admin'`);
+      console.log(`[数据库] 恢复 ${restoredAdmins} 个管理员`);
+    }
+    
+    saveDatabase();
+    console.log('[数据库] 从 GitHub 恢复成功');
+    return true;
+  } catch (e) {
+    console.error('[数据库] 从 GitHub 恢复失败:', e.message);
+    return false;
+  }
+}
+
 async function initDatabase() {
   const SQL = await initSqlJs();
   
   if (fs.existsSync(DB_PATH)) {
     console.log('[数据库] 从磁盘加载');
     db = new SQL.Database(fs.readFileSync(DB_PATH));
+  } else if (await restoreFromGitHub(SQL)) {
+    // 已从 GitHub 恢复，db 已设置
+    const _prepare = db.prepare.bind(db);
+    const _exec = db.exec.bind(db);
+    db.prepare = function(sqlText) {
+      return {
+        run: (...params) => {
+          let stmt;
+          try {
+            stmt = _prepare(sqlText);
+            if (params.length > 0) stmt.bind(params);
+            stmt.step();
+            stmt.free();
+          } catch (e) { if (stmt) stmt.free(); throw e; }
+          const r = _exec('SELECT last_insert_rowid() as lid, changes() as chg');
+          const lid = (r[0] && r[0].values[0]) ? r[0].values[0][0] : 0;
+          const chg = (r[0] && r[0].values[0]) ? r[0].values[0][1] : 0;
+          return { lastInsertRowid: lid, changes: chg };
+        },
+        get: (...params) => {
+          let stmt, row;
+          try {
+            stmt = _prepare(sqlText);
+            if (params.length > 0) stmt.bind(params);
+            if (stmt.step()) row = stmt.getAsObject();
+            stmt.free();
+          } catch (e) { if (stmt) stmt.free(); throw e; }
+          return row;
+        },
+        all: (...params) => {
+          let stmt;
+          const rows = [];
+          try {
+            stmt = _prepare(sqlText);
+            if (params.length > 0) stmt.bind(params);
+            while (stmt.step()) rows.push(stmt.getAsObject());
+            stmt.free();
+          } catch (e) { if (stmt) stmt.free(); throw e; }
+          return rows;
+        }
+      };
+    };
+    db.get = (sql, ...p) => db.prepare(sql).get(...p);
+    db.all = (sql, ...p) => db.prepare(sql).all(...p);
+    db.run = (sql, ...p) => db.prepare(sql).run(...p);
+    return;
   } else {
     console.log('[数据库] 创建新数据库');
     db = new SQL.Database();
