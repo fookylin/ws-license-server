@@ -434,9 +434,22 @@ app.post('/api/activate', (req, res) => {
       return res.json({ success: false, error: 'KEY_EXPIRED', message: '密钥已过期' });
     }
 
-    // 密钥已激活（status=1）— 验证设备，返回 updatedKey
+    // 密钥已激活（status=1）— 验证设备指纹
     if (keyRecord.status === 1) {
-      if (keyRecord.device_fingerprint && keyRecord.device_fingerprint === machine_code) {
+      // 如果没有记录指纹（数据库被重置后首条记录），直接通过并更新指纹
+      if (!keyRecord.device_fingerprint) {
+        db.run('UPDATE license_keys SET device_fingerprint = ? WHERE id = ?', machine_code, keyRecord.id);
+        saveDatabase();
+        const expiresAtMs = keyRecord.expires_at ? new Date(keyRecord.expires_at).getTime() : null;
+        const updatedKey = generateUpdatedKey(normalizedKey, expiresAtMs);
+        return res.json({
+          success: true, message: '激活成功',
+          updatedKey, server_time: Date.now(),
+          expires_at: keyRecord.expires_at
+        });
+      }
+      // 指纹完全一致 → 通过
+      if (keyRecord.device_fingerprint === machine_code) {
         const expiresAtMs = keyRecord.expires_at ? new Date(keyRecord.expires_at).getTime() : null;
         const updatedKey = generateUpdatedKey(normalizedKey, expiresAtMs);
         return res.json({
@@ -444,9 +457,9 @@ app.post('/api/activate', (req, res) => {
           updatedKey, server_time: Date.now(),
           expires_at: keyRecord.expires_at
         });
-      } else {
-        return res.json({ success: false, error: 'DEVICE_REPLACED', reason: '该密钥已在其他设备上激活' });
       }
+      // 指纹不一致 → 真正在不同设备上激活，拒绝
+      return res.json({ success: false, error: 'DEVICE_REPLACED', reason: '该密钥已在其他设备上激活，本机授权已失效' });
     }
 
     // 执行首次激活（status=0）
@@ -494,8 +507,15 @@ app.post('/api/verify', (req, res) => {
     }
 
     // 验证设备指纹
-    if (keyRecord.device_fingerprint && keyRecord.device_fingerprint !== machine_code) {
-      return res.json({ valid: false, error: 'DEVICE_REPLACED', reason: '该密钥已在其他设备上激活' });
+    // 如果没有记录指纹（数据库被重置后），允许通过并补录指纹
+    if (keyRecord.device_fingerprint) {
+      if (keyRecord.device_fingerprint !== machine_code) {
+        return res.json({ valid: false, error: 'DEVICE_REPLACED', reason: '该密钥已在其他设备上激活，本机授权已失效' });
+      }
+    } else {
+      // 补录指纹
+      db.run('UPDATE license_keys SET device_fingerprint = ? WHERE id = ?', machine_code, keyRecord.id);
+      saveDatabase();
     }
 
     res.json({
