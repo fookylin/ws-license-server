@@ -6,6 +6,7 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
+const https = require('https');
 const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
@@ -29,8 +30,78 @@ function saveDatabase() {
   try {
     const data = db.export();
     fs.writeFileSync(DB_PATH, Buffer.from(data));
+    // 异步备份到 GitHub（不影响主流程）
+    backupToGitHub();
   } catch (e) {
     console.error('[数据库] 保存失败:', e.message);
+  }
+}
+
+// ========== GitHub 数据库备份 ==========
+const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
+const GITHUB_REPO = 'fookylin/ws-license-server';
+const BACKUP_BRANCH = 'main';
+const BACKUP_PATH = 'data/backup.json';
+
+function githubApi(method, path, body, token) {
+  return new Promise((resolve, reject) => {
+    const tokenAuth = token || GITHUB_TOKEN;
+    const opts = {
+      hostname: 'api.github.com',
+      path,
+      method,
+      headers: {
+        'Authorization': `token ${tokenAuth}`,
+        'User-Agent': 'ws-license-server',
+        'Accept': 'application/vnd.github.v3+json',
+        'Content-Type': 'application/json'
+      }
+    };
+    let data = '';
+    const req = https.request(opts, res => {
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        try { resolve({ status: res.statusCode, body: JSON.parse(data) }); }
+        catch { resolve({ status: res.statusCode, body: data }); }
+      });
+    });
+    req.on('error', reject);
+    if (body) req.write(JSON.stringify(body));
+    req.end();
+  });
+}
+
+async function backupToGitHub() {
+  if (!GITHUB_TOKEN) return;
+  try {
+    // 导出数据库关键数据为 JSON
+    const licenseKeys = db.all('SELECT * FROM license_keys ORDER BY id');
+    const admins = db.all('SELECT id, username, role, nickname, status, last_login_at, created_at FROM admins');
+    const backup = {
+      updated_at: new Date().toISOString(),
+      license_keys: licenseKeys,
+      admins
+    };
+    const content = Buffer.from(JSON.stringify(backup, null, 2)).toString('base64');
+
+    // 尝试获取当前 backup 文件的 SHA（如果存在）
+    let sha = null;
+    try {
+      const existing = await githubApi('GET', `/repos/${GITHUB_REPO}/contents/${BACKUP_PATH}?ref=${BACKUP_BRANCH}`);
+      if (existing.status === 200 && existing.body.sha) sha = existing.body.sha;
+    } catch (_) {}
+
+    // 写入或更新文件
+    const payload = { message: `backup: ${new Date().toISOString()}`, content, branch: BACKUP_BRANCH };
+    if (sha) payload.sha = sha;
+    const result = await githubApi('PUT', `/repos/${GITHUB_REPO}/contents/${BACKUP_PATH}`, payload);
+    if (result.status === 200 || result.status === 201) {
+      console.log('[GitHub备份] 成功');
+    } else {
+      console.error('[GitHub备份] 失败:', result.status, result.body);
+    }
+  } catch (e) {
+    console.error('[GitHub备份] 异常:', e.message);
   }
 }
 
@@ -297,6 +368,111 @@ app.delete('/api/admin/keys/:id', authenticateToken, (req, res) => {
   if (result.changes === 0) return res.status(404).json({ success: false, message: '密钥不存在' });
   saveDatabase();
   res.json({ success: true });
+});
+
+// ========== 补充 API 路由 ==========
+
+// 用户管理
+app.get('/api/admin/users', authenticateToken, (req, res) => {
+  const page = parseInt(req.query.page) || 1;
+  const limit = parseInt(req.query.limit) || 20;
+  const offset = (page - 1) * limit;
+  const search = req.query.search || '';
+  const status = req.query.status || '';
+  
+  let where = '1=1';
+  const params = [];
+  if (search) { where += ' AND (email LIKE ? OR phone LIKE ? OR nickname LIKE ? OR invite_code LIKE ?)'; params.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`); }
+  if (status) { where += ' AND status = ?'; params.push(parseInt(status)); }
+  
+  const users = db.all(`SELECT id, email, phone, nickname, invite_code, inviter_id, status, balance, total_recharged, created_at FROM users WHERE ${where} ORDER BY created_at DESC LIMIT ? OFFSET ?`, ...params, limit, offset);
+  const total = db.get(`SELECT COUNT(*) as count FROM users WHERE ${where}`, ...params).count;
+  
+  res.json({ success: true, users, pagination: { page, limit, total, totalPages: Math.ceil(total / limit) } });
+});
+
+app.post('/api/admin/users', authenticateToken, (req, res) => {
+  const { email, phone, nickname, password } = req.body;
+  if (!email && !phone) return res.status(400).json({ success: false, message: '邮箱或手机号必填' });
+  const invite_code = crypto.randomBytes(4).toString('hex').toUpperCase();
+  const hash = password ? bcrypt.hashSync(password, 10) : '';
+  const result = db.run('INSERT INTO users (email, phone, nickname, password, invite_code, status) VALUES (?, ?, ?, ?, ?, 1)', email, phone, nickname, hash, invite_code);
+  saveDatabase();
+  const user = db.get('SELECT id, email, phone, nickname, invite_code, status, created_at FROM users WHERE id = ?', result.lastInsertRowid);
+  res.json({ success: true, user });
+});
+
+// 订单管理
+app.get('/api/admin/orders', authenticateToken, (req, res) => {
+  const page = parseInt(req.query.page) || 1;
+  const limit = parseInt(req.query.limit) || 20;
+  const offset = (page - 1) * limit;
+  const status = req.query.status || '';
+  
+  let where = '1=1';
+  const params = [];
+  if (status) { where += ' AND status = ?'; params.push(status); }
+  
+  const orders = db.all(`SELECT * FROM orders WHERE ${where} ORDER BY created_at DESC LIMIT ? OFFSET ?`, ...params, limit, offset);
+  const total = db.get(`SELECT COUNT(*) as count FROM orders WHERE ${where}`, ...params).count;
+  
+  res.json({ success: true, orders, pagination: { page, limit, total, totalPages: Math.ceil(total / limit) } });
+});
+
+app.post('/api/admin/orders/:id/confirm', authenticateToken, (req, res) => {
+  const order = db.get('SELECT * FROM orders WHERE id = ?', req.params.id);
+  if (!order) return res.status(404).json({ success: false, message: '订单不存在' });
+  if (order.status !== 'pending') return res.status(400).json({ success: false, message: '订单状态不允许' });
+  
+  db.run("UPDATE orders SET status = 'completed', confirmed_at = ? WHERE id = ?", new Date().toISOString(), req.params.id);
+  
+  // 生成密钥
+  const key = generateLicenseKey('WS');
+  db.run('INSERT INTO license_keys (key_code, type, duration_days, status, user_id, order_id, created_by) VALUES (?, ?, ?, 1, ?, ?, ?)',
+    key, order.key_type, order.duration_days, order.user_id, order.id, req.user.id);
+  
+  saveDatabase();
+  res.json({ success: true, message: '订单已确认', key });
+});
+
+// 分销管理
+app.get('/api/admin/commissions', authenticateToken, (req, res) => {
+  const page = parseInt(req.query.page) || 1;
+  const limit = parseInt(req.query.limit) || 20;
+  const offset = (page - 1) * limit;
+  
+  const commissions = db.all('SELECT * FROM commissions ORDER BY created_at DESC LIMIT ? OFFSET ?', limit, offset);
+  const total = db.get('SELECT COUNT(*) as count FROM commissions').count;
+  
+  res.json({ success: true, commissions, pagination: { page, limit, total, totalPages: Math.ceil(total / limit) } });
+});
+
+// 操作日志
+app.get('/api/admin/logs', authenticateToken, (req, res) => {
+  const page = parseInt(req.query.page) || 1;
+  const limit = parseInt(req.query.limit) || 50;
+  const offset = (page - 1) * limit;
+  
+  const logs = db.all('SELECT * FROM admin_logs ORDER BY created_at DESC LIMIT ? OFFSET ?', limit, offset);
+  const total = db.get('SELECT COUNT(*) as count FROM admin_logs').count;
+  
+  res.json({ success: true, logs, pagination: { page, limit, total, totalPages: Math.ceil(total / limit) } });
+});
+
+// 系统设置
+app.get('/api/admin/settings', authenticateToken, (req, res) => {
+  const settings = db.all('SELECT * FROM settings');
+  const obj = {};
+  settings.forEach(s => obj[s.key] = s.value);
+  res.json({ success: true, settings: obj });
+});
+
+app.post('/api/admin/settings', authenticateToken, (req, res) => {
+  Object.entries(req.body).forEach(([k, v]) => {
+    db.run("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", k, v);
+  });
+  saveDatabase();
+  res.json({ success: true, message: '设置已保存' });
 });
 
 // 统计
