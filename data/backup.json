@@ -1,23 +1,6 @@
 {
-  "updated_at": "2026-06-22T07:58:20.594Z",
-  "license_keys": [
-    {
-      "id": 1,
-      "key_code": "WS-44C14C836D1BEBA5-31CE8A4B9C8F318F-TH0WT8",
-      "type": "time",
-      "duration_days": 30,
-      "account_limit": 3,
-      "status": 0,
-      "price": 0,
-      "created_by": 1,
-      "activated_by": null,
-      "activated_at": null,
-      "expires_at": null,
-      "device_fingerprint": "",
-      "remark": "autotest",
-      "created_at": "2026-06-22 07:58:20"
-    }
-  ],
+  "updated_at": "2026-06-22T07:58:38.632Z",
+  "license_keys": [],
   "admins": [
     {
       "id": 1,
@@ -26,7 +9,7 @@
       "nickname": "超级管理员",
       "status": 1,
       "last_login_at": null,
-      "created_at": "2026-06-22 07:57:25"
+      "created_at": "2026-06-22 07:58:37"
     }
   ]
 }
