@@ -286,11 +286,29 @@ function normalizeKeyForDb(key) {
   return key.toUpperCase().replace(/-/g, '');
 }
 
-function generateLicenseKey(prefix = 'WS') {
+function generateLicenseKey(prefix = 'WS', type = 'time', durationDays = null) {
   const p1 = crypto.randomBytes(2).toString('hex').toUpperCase();
   const p2 = crypto.randomBytes(2).toString('hex').toUpperCase();
   const p3 = crypto.randomBytes(2).toString('hex').toUpperCase();
-  return `${prefix}-${p1}-${p2}-${p3}`;
+  if (type === 'permanent') {
+    return `${prefix}-${p1}-${p2}-${p3}-PERM`;
+  }
+  // 未激活的限时密钥，第4段为占位时间戳
+  return `${prefix}-${p1}-${p2}-${p3}-9999999999`;
+}
+
+// 生成激活后的更新密钥（含真实过期时间戳）
+function generateUpdatedKey(originalKey, expiresAtMs) {
+  const parts = originalKey.split('-');
+  if (expiresAtMs == null) {
+    // 永久密钥
+    parts[parts.length - 1] = 'PERM';
+  } else {
+    // 限时密钥，第4段 = base36(unix秒级时间戳)
+    const unixSec = Math.floor(expiresAtMs / 1000);
+    parts[parts.length - 1] = unixSec.toString(36).toUpperCase();
+  }
+  return parts.join('-');
 }
 
 // ========== 中间件 ==========
@@ -357,7 +375,7 @@ app.post('/api/admin/keys/generate', authenticateToken, (req, res) => {
     
     const results = [];
     for (let i = 0; i < count; i++) {
-      const key = generateLicenseKey('WS');
+      const key = generateLicenseKey('WS', type, duration_days);
       const now = new Date().toISOString();
       
       // 匹配 schema: license_keys 表，字段 key_code, type, duration_days, remark, status, created_by
@@ -412,11 +430,17 @@ app.post('/api/activate', (req, res) => {
   saveDatabase();
   const updated = db.get('SELECT * FROM license_keys WHERE id = ?', keyRecord.id);
   
+  // 生成客户端所需的 updatedKey（含过期时间戳）
+  const expiresAtMs = updated.expires_at ? new Date(updated.expires_at).getTime() : null;
+  const updatedKey = generateUpdatedKey(key, expiresAtMs);
+
   res.json({
     success: true,
     key: updated.key_code,
     type: updated.type,
-    expires_at: updated.expires_at ? new Date(updated.expires_at).getTime() : null,
+    expires_at: expiresAtMs,
+    updatedKey: updatedKey,
+    server_time: Date.now(),
     message: '激活成功'
   });
 });
@@ -445,11 +469,17 @@ app.post('/api/verify', (req, res) => {
     }
   }
   
+  const expiresAtMs = keyRecord.expires_at ? new Date(keyRecord.expires_at).getTime() : null;
+  const updatedKey = generateUpdatedKey(key, expiresAtMs);
+
   res.json({
     success: true,
+    valid: true,
     key: keyRecord.key_code,
     type: keyRecord.type,
-    expires_at: keyRecord.expires_at ? new Date(keyRecord.expires_at).getTime() : null,
+    expires_at: expiresAtMs,
+    updatedKey: updatedKey,
+    server_time: Date.now(),
     message: '验证成功'
   });
 });
@@ -529,11 +559,9 @@ app.post('/api/admin/orders/:id/confirm', authenticateToken, (req, res) => {
   db.run("UPDATE orders SET status = 'completed', confirmed_at = ? WHERE id = ?", new Date().toISOString(), req.params.id);
   
   // 生成密钥
-  const key = generateLicenseKey('WS');
+  const key = generateLicenseKey('WS', order.key_type, order.duration_days);
   db.run('INSERT INTO license_keys (key_code, type, duration_days, status, user_id, order_id, created_by) VALUES (?, ?, ?, 1, ?, ?, ?)',
     key, order.key_type, order.duration_days, order.user_id, order.id, req.user.id);
-  
-  saveDatabase();
   res.json({ success: true, message: '订单已确认', key });
 });
 
