@@ -282,33 +282,41 @@ async function initDatabase() {
 }
 
 // ========== 工具函数 ==========
-function normalizeKeyForDb(key) {
-  return key.toUpperCase().replace(/-/g, '');
+
+// 生成授权密钥（4段格式：WS-16hex-16hex-base36(创建时间戳)）
+function generateLicenseKey(prefix = 'WS') {
+  const part1 = crypto.randomBytes(8).toString('hex').toUpperCase();
+  const part2 = crypto.randomBytes(8).toString('hex').toUpperCase();
+  const ts = Math.floor(Date.now() / 1000).toString(36).toUpperCase();
+  return `${prefix}-${part1}-${part2}-${ts}`;
 }
 
-function generateLicenseKey(prefix = 'WS', type = 'time', durationDays = null) {
-  const p1 = crypto.randomBytes(2).toString('hex').toUpperCase();
-  const p2 = crypto.randomBytes(2).toString('hex').toUpperCase();
-  const p3 = crypto.randomBytes(2).toString('hex').toUpperCase();
-  if (type === 'permanent') {
-    return `${prefix}-${p1}-${p2}-${p3}-PERM`;
-  }
-  // 未激活的限时密钥，第4段为占位时间戳
-  return `${prefix}-${p1}-${p2}-${p3}-9999999999`;
-}
-
-// 生成激活后的更新密钥（含真实过期时间戳）
+// 生成激活后的更新密钥（第4段替换为过期时间戳 base36）
 function generateUpdatedKey(originalKey, expiresAtMs) {
-  const parts = originalKey.split('-');
-  if (expiresAtMs == null) {
-    // 永久密钥
-    parts[parts.length - 1] = 'PERM';
-  } else {
-    // 限时密钥，第4段 = base36(unix秒级时间戳)
-    const unixSec = Math.floor(expiresAtMs / 1000);
-    parts[parts.length - 1] = unixSec.toString(36).toUpperCase();
+  try {
+    const parts = originalKey.split('-');
+    if (parts.length >= 4) {
+      // 永久密钥：第4段=PERM；限时密钥：第4段=base36(unix秒级过期时间戳)
+      const expiresTs = expiresAtMs != null
+        ? Math.floor(expiresAtMs / 1000).toString(36).toUpperCase()
+        : 'PERM';
+      return `${parts[0]}-${parts[1]}-${parts[2]}-${expiresTs}`;
+    }
+    return originalKey;
+  } catch { return originalKey; }
+}
+
+// 标准化 key：将 updatedKey（第4段可能是 PERM 或新时间戳）还原为数据库中的原始 key
+// 策略：取前3段+通配符 LIKE 查库，兼容第4段变化
+function normalizeKeyForDb(key) {
+  const parts = key.split('-');
+  if (parts.length === 4) {
+    const baseKey = `${parts[0]}-${parts[1]}-${parts[2]}`;
+    const found = db.get('SELECT key_code FROM license_keys WHERE key_code LIKE ? LIMIT 1', baseKey + '%');
+    if (found) return found.key_code;
+    return key; // 兜底：可能用户输入的就是原始key
   }
-  return parts.join('-');
+  return key;
 }
 
 // ========== 中间件 ==========
@@ -375,7 +383,7 @@ app.post('/api/admin/keys/generate', authenticateToken, (req, res) => {
     
     const results = [];
     for (let i = 0; i < count; i++) {
-      const key = generateLicenseKey('WS', type, duration_days);
+      const key = generateLicenseKey('WS');
       const now = new Date().toISOString();
       
       // 匹配 schema: license_keys 表，字段 key_code, type, duration_days, remark, status, created_by
@@ -395,94 +403,112 @@ app.post('/api/admin/keys/generate', authenticateToken, (req, res) => {
   }
 });
 
-// 激活密钥
+// ================================================================
+//  API — 客户端直接调用（激活/验证，无需用户登录）
+// ================================================================
+
+// POST /api/activate — 激活密钥（客户端联网激活）
 app.post('/api/activate', (req, res) => {
-  const { key, machine_code, version = '2.0' } = req.body;
-  if (!key || !machine_code) return res.status(400).json({ success: false, error: '密钥和机器码不能为空' });
-  
-  const normalizedKey = normalizeKeyForDb(key);
-  // 用 key_code 查找，支持模糊匹配
-  const keyRecord = db.get('SELECT * FROM license_keys WHERE key_code = ?', key);
-  
-  if (!keyRecord) return res.json({ success: false, error: '密钥不存在' });
-  if (keyRecord.status === 2) return res.json({ success: false, error: '密钥已被禁用' });
-  if (keyRecord.status === 3) return res.json({ success: false, error: '密钥已过期' });
-  
-  // 检查过期
-  if (keyRecord.type !== 'permanent' && keyRecord.expires_at) {
-    if (Date.now() > new Date(keyRecord.expires_at).getTime()) {
-      db.run('UPDATE license_keys SET status = 3 WHERE id = ?', keyRecord.id);
-      saveDatabase();
-      return res.json({ success: false, error: '密钥已过期' });
+  try {
+    const { key, machine_code } = req.body;
+    if (!key) return res.status(400).json({ success: false, error: '密钥不能为空' });
+    if (!machine_code) return res.status(400).json({ success: false, error: '机器码不能为空' });
+
+    // 标准化 key：第4段可能是 PERM 或过期时间戳，统一取前3段+原时间戳查库
+    const normalizedKey = normalizeKeyForDb(key.trim());
+    const keyRecord = db.get('SELECT * FROM license_keys WHERE key_code = ?', normalizedKey);
+
+    if (!keyRecord) {
+      return res.json({ success: false, error: 'KEY_NOT_FOUND', message: '密钥不存在' });
     }
-  }
-  
-  // 首次激活：设置 expires_at 和设备指纹
-  if (keyRecord.status === 0) {
+    if (keyRecord.status === 2) {
+      return res.json({ success: false, error: 'KEY_DISABLED', message: '密钥已被禁用' });
+    }
+
+    // 检查是否过期
+    if (keyRecord.status === 3 || (keyRecord.expires_at && new Date(keyRecord.expires_at) < new Date())) {
+      if (keyRecord.status !== 3) {
+        db.run('UPDATE license_keys SET status = 3 WHERE id = ?', keyRecord.id);
+        saveDatabase();
+      }
+      return res.json({ success: false, error: 'KEY_EXPIRED', message: '密钥已过期' });
+    }
+
+    // 密钥已激活（status=1）— 验证设备，返回 updatedKey
+    if (keyRecord.status === 1) {
+      if (keyRecord.device_fingerprint && keyRecord.device_fingerprint === machine_code) {
+        const expiresAtMs = keyRecord.expires_at ? new Date(keyRecord.expires_at).getTime() : null;
+        const updatedKey = generateUpdatedKey(normalizedKey, expiresAtMs);
+        return res.json({
+          success: true, message: '激活成功（已绑定本设备）',
+          updatedKey, server_time: Date.now(),
+          expires_at: keyRecord.expires_at
+        });
+      } else {
+        return res.json({ success: false, error: 'DEVICE_REPLACED', reason: '该密钥已在其他设备上激活' });
+      }
+    }
+
+    // 执行首次激活（status=0）
     let expiresAt = null;
-    if (keyRecord.type === 'time' && keyRecord.duration_days > 0) {
-      expiresAt = new Date(Date.now() + keyRecord.duration_days * 24 * 60 * 60 * 1000).toISOString();
+    if (keyRecord.type === 'time') {
+      expiresAt = new Date(Date.now() + (keyRecord.duration_days || 30) * 86400000).toISOString();
     }
     db.run('UPDATE license_keys SET status = 1, activated_at = ?, expires_at = ?, device_fingerprint = ? WHERE id = ?',
       new Date().toISOString(), expiresAt, machine_code, keyRecord.id);
-  }
-  
-  saveDatabase();
-  const updated = db.get('SELECT * FROM license_keys WHERE id = ?', keyRecord.id);
-  
-  // 生成客户端所需的 updatedKey（含过期时间戳）
-  const expiresAtMs = updated.expires_at ? new Date(updated.expires_at).getTime() : null;
-  const updatedKey = generateUpdatedKey(key, expiresAtMs);
+    saveDatabase();
 
-  res.json({
-    success: true,
-    key: updated.key_code,
-    type: updated.type,
-    expires_at: expiresAtMs,
-    updatedKey: updatedKey,
-    server_time: Date.now(),
-    message: '激活成功'
-  });
+    const updatedKey = generateUpdatedKey(normalizedKey, expiresAt ? new Date(expiresAt).getTime() : null);
+    res.json({
+      success: true, message: '激活成功', updatedKey, server_time: Date.now(),
+      expires_at: expiresAt
+    });
+  } catch (err) {
+    console.error('[激活] 失败:', err);
+    res.status(500).json({ success: false, error: 'SERVER_ERROR', message: '服务器内部错误' });
+  }
 });
 
-// 验证密钥
+// POST /api/verify — 验证密钥（客户端联网验证）
 app.post('/api/verify', (req, res) => {
-  const { key, machine_code, version = '2.0' } = req.body;
-  if (!key || !machine_code) return res.status(400).json({ success: false, error: '密钥和机器码不能为空' });
-  
-  const keyRecord = db.get('SELECT * FROM license_keys WHERE key_code = ?', key);
-  if (!keyRecord) return res.json({ success: false, error: '密钥不存在' });
-  if (keyRecord.status === 2) return res.json({ success: false, error: '密钥已被禁用' });
-  if (keyRecord.status === 3) return res.json({ success: false, error: '密钥已过期' });
-  
-  // 验证设备指纹
-  if (keyRecord.device_fingerprint && keyRecord.device_fingerprint !== machine_code) {
-    return res.json({ success: false, error: '机器码不匹配' });
-  }
-  
-  // 检查过期
-  if (keyRecord.type !== 'permanent' && keyRecord.expires_at) {
-    if (Date.now() > new Date(keyRecord.expires_at).getTime()) {
-      db.run('UPDATE license_keys SET status = 3 WHERE id = ?', keyRecord.id);
-      saveDatabase();
-      return res.json({ success: false, error: '密钥已过期' });
-    }
-  }
-  
-  const expiresAtMs = keyRecord.expires_at ? new Date(keyRecord.expires_at).getTime() : null;
-  const updatedKey = generateUpdatedKey(key, expiresAtMs);
+  try {
+    const { key, machine_code } = req.body;
+    if (!key) return res.status(400).json({ valid: false, error: '密钥不能为空' });
+    if (!machine_code) return res.status(400).json({ valid: false, error: '机器码不能为空' });
 
-  res.json({
-    success: true,
-    valid: true,
-    key: keyRecord.key_code,
-    type: keyRecord.type,
-    expires_at: expiresAtMs,
-    updatedKey: updatedKey,
-    server_time: Date.now(),
-    message: '验证成功'
-  });
+    // 标准化 key
+    const normalizedKey = normalizeKeyForDb(key.trim());
+    const keyRecord = db.get('SELECT * FROM license_keys WHERE key_code = ?', normalizedKey);
+
+    if (!keyRecord) return res.json({ valid: false, error: 'KEY_NOT_FOUND', reason: '密钥不存在' });
+    if (keyRecord.status === 2) return res.json({ valid: false, error: 'KEY_DISABLED', reason: '密钥已被禁用' });
+    if (keyRecord.status === 0) return res.json({ valid: false, error: 'NOT_ACTIVATED', reason: '密钥尚未激活' });
+
+    // 检查过期
+    if (keyRecord.status === 3 || (keyRecord.expires_at && new Date(keyRecord.expires_at) < new Date())) {
+      if (keyRecord.status !== 3) {
+        db.run('UPDATE license_keys SET status = 3 WHERE id = ?', keyRecord.id);
+        saveDatabase();
+      }
+      return res.json({ valid: false, error: 'KEY_EXPIRED', reason: '密钥已过期' });
+    }
+
+    // 验证设备指纹
+    if (keyRecord.device_fingerprint && keyRecord.device_fingerprint !== machine_code) {
+      return res.json({ valid: false, error: 'DEVICE_REPLACED', reason: '该密钥已在其他设备上激活' });
+    }
+
+    res.json({
+      valid: true, server_time: Date.now(),
+      expires_at: keyRecord.expires_at
+    });
+  } catch (err) {
+    console.error('[验证] 失败:', err);
+    res.status(500).json({ valid: false, error: 'SERVER_ERROR', reason: '服务器内部错误' });
+  }
 });
+
+// ========== 禁用/启用密钥 ==========
 
 // 禁用/启用密钥
 app.post('/api/admin/keys/:id/toggle', authenticateToken, (req, res) => {
@@ -559,7 +585,7 @@ app.post('/api/admin/orders/:id/confirm', authenticateToken, (req, res) => {
   db.run("UPDATE orders SET status = 'completed', confirmed_at = ? WHERE id = ?", new Date().toISOString(), req.params.id);
   
   // 生成密钥
-  const key = generateLicenseKey('WS', order.key_type, order.duration_days);
+  const key = generateLicenseKey('WS');
   db.run('INSERT INTO license_keys (key_code, type, duration_days, status, user_id, order_id, created_by) VALUES (?, ?, ?, 1, ?, ?, ?)',
     key, order.key_type, order.duration_days, order.user_id, order.id, req.user.id);
   res.json({ success: true, message: '订单已确认', key });
