@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-06-22T08:19:00.157Z",
+  "updated_at": "2026-06-22T08:19:38.668Z",
   "license_keys": [],
   "admins": [
     {
@@ -9,7 +9,7 @@
       "nickname": "超级管理员",
       "status": 1,
       "last_login_at": null,
-      "created_at": "2026-06-22 08:18:59"
+      "created_at": "2026-06-22 08:19:37"
     }
   ]
 }
