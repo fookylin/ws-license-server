@@ -1,6 +1,23 @@
 {
-  "updated_at": "2026-06-22T06:20:42.559Z",
-  "license_keys": [],
+  "updated_at": "2026-06-22T06:21:12.767Z",
+  "license_keys": [
+    {
+      "id": 1,
+      "key_code": "WS-5D5F59114A6676CB-3D845CA2194B81DA-TH0SBC",
+      "type": "time",
+      "duration_days": 30,
+      "account_limit": 3,
+      "status": 0,
+      "price": 0,
+      "created_by": 1,
+      "activated_by": null,
+      "activated_at": null,
+      "expires_at": null,
+      "device_fingerprint": "",
+      "remark": "",
+      "created_at": "2026-06-22 06:21:12"
+    }
+  ],
   "admins": [
     {
       "id": 1,
